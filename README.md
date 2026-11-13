@@ -30,6 +30,20 @@ App owners usually have to raise a ticket every time a client secret expires or 
 
 ---
 
+## 📸 Screenshots
+
+**Sign-in page**: users sign in with their organisation account.
+
+![Sign-in page](docs/screenshots/sign-in.png)
+
+**App dashboard**: the signed-in user sees only the app registrations they own, with tabs for client secrets, certificates, federated credentials, API permissions and owners.
+
+![App dashboard](docs/screenshots/dashboard.png)
+
+> Tenant-specific details (App IDs, Object IDs, secret hints and the signed-in user's name) are redacted.
+
+---
+
 ## ✨ Features
 
 <table>

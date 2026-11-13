@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entra App Self-Service</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 3 6v6c0 5 3.8 9.4 9 10 5.2-.6 9-5 9-10V6l-9-4Zm0 2.2 7 3.1V12c0 3.9-2.9 7.4-7 8-4.1-.6-7-4.1-7-8V7.3l7-3.1Z"/></svg>
+      <span>Entra App Self-Service</span>
+    </div>
+    <div id="userBox" class="user hidden">
+      <span id="userName"></span>
+      <a class="btn btn-ghost" href="/auth/signout">Sign out</a>
+    </div>
+  </header>
+
+  <!-- Signed-out -->
+  <main id="signedOut" class="signin hidden">
+    <div class="card signin-card">
+      <h1>Manage the apps you own</h1>
+      <p>Sign in with your organisation account to rotate client secrets, update certificates and manage owners for Entra ID app registrations you own.</p>
+      <a class="btn btn-primary" href="/auth/signin">Sign in with Microsoft</a>
+    </div>
+  </main>
+
+  <!-- Signed-in -->
+  <main id="signedIn" class="layout hidden">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>My applications <span id="appCount" class="muted"></span></h2>
+        <input id="appFilter" type="search" placeholder="Filter by name or App ID" autocomplete="off">
+      </div>
+      <ul id="appList" class="app-list" aria-label="Applications you own"></ul>
+    </aside>
+
+    <section id="detail" class="detail">
+      <div id="emptyState" class="empty">Select an application to manage it.</div>
+
+      <div id="appDetail" class="hidden">
+        <div class="detail-head">
+          <div>
+            <h1 id="dName"></h1>
+            <div class="meta">
+              <span>App (client) ID: <code id="dAppId"></code></span>
+              <span>Object ID: <code id="dObjId"></code></span>
+            </div>
+          </div>
+          <button id="refreshBtn" class="btn btn-ghost" type="button">Refresh</button>
+        </div>
+
+        <nav class="tabs" role="tablist">
+          <button class="tab active" data-tab="secrets" role="tab">Client secrets</button>
+          <button class="tab" data-tab="certs" role="tab">Certificates</button>
+          <button class="tab" data-tab="federated" role="tab">Federated credentials</button>
+          <button class="tab" data-tab="perms" role="tab">API permissions</button>
+          <button class="tab" data-tab="owners" role="tab">Owners</button>
+        </nav>
+
+        <!-- Secrets -->
+        <div class="panel" data-panel="secrets">
+          <div class="panel-actions">
+            <button id="newSecretBtn" class="btn btn-primary" type="button">+ New client secret</button>
+          </div>
+          <table class="grid">
+            <thead><tr><th>Description</th><th>Hint</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+            <tbody id="secretRows"></tbody>
+          </table>
+        </div>
+
+        <!-- Certificates -->
+        <div class="panel hidden" data-panel="certs">
+          <form id="certForm" class="upload">
+            <label class="file">
+              <input id="certFile" type="file" accept=".cer,.crt,.pem" required>
+              <span id="certFileLabel">Choose public certificate (.cer, .crt, .pem)</span>
+            </label>
+            <input id="certName" type="text" maxlength="100" placeholder="Description (optional)">
+            <button class="btn btn-primary" type="submit">Upload certificate</button>
+          </form>
+          <table class="grid">
+            <thead><tr><th>Description</th><th>Thumbprint</th><th>Expires</th><th>Status</th><th></th></tr></thead>
+            <tbody id="certRows"></tbody>
+          </table>
+        </div>
+
+        <!-- Federated credentials -->
+        <div class="panel hidden" data-panel="federated">
+          <div class="panel-actions">
+            <button id="newFicBtn" class="btn btn-primary" type="button">+ Add federated credential</button>
+            <span class="muted hint">Let GitHub Actions, Kubernetes, Azure DevOps or another OIDC provider sign in as this app without a secret.</span>
+          </div>
+          <table class="grid">
+            <thead><tr><th>Name</th><th>Issuer</th><th>Subject</th><th>Audience</th><th></th></tr></thead>
+            <tbody id="ficRows"></tbody>
+          </table>
+        </div>
+
+        <!-- API permissions -->
+        <div class="panel hidden" data-panel="perms">
+          <div class="panel-actions">
+            <button id="addPermBtn" class="btn btn-primary" type="button">+ Add a permission</button>
+            <a id="consentLink" class="btn btn-ghost" target="_blank" rel="noopener noreferrer" href="#">Grant admin consent in Entra ↗</a>
+          </div>
+          <p class="muted small note">Adding a permission only <em>requests</em> it. Permissions marked “Admin consent required” must be granted by an administrator. Removing a permission here does not revoke consent that was already granted.</p>
+          <table class="grid">
+            <thead><tr><th>API / Permission</th><th>Type</th><th>Admin consent required</th><th>Status</th><th></th></tr></thead>
+            <tbody id="permRows"></tbody>
+          </table>
+        </div>
+
+        <!-- Owners -->
+        <div class="panel hidden" data-panel="owners">
+          <div class="panel-actions">
+            <button id="addOwnerBtn" class="btn btn-primary" type="button">+ Add owner</button>
+          </div>
+          <table class="grid">
+            <thead><tr><th>Name</th><th>User principal name</th><th>Type</th><th></th></tr></thead>
+            <tbody id="ownerRows"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- New secret dialog -->
+  <dialog id="secretDialog">
+    <form id="secretForm" method="dialog">
+      <h2>Add a client secret</h2>
+      <label>Description
+        <input id="secretName" type="text" maxlength="100" placeholder="e.g. Prod rotation Nov 2026">
+      </label>
+      <label>Expires in
+        <select id="secretMonths"></select>
+      </label>
+      <label>Replace (delete) existing secret after creation
+        <select id="secretReplace"><option value="">— Keep all existing secrets —</option></select>
+      </label>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" value="cancel" type="button" data-close>Cancel</button>
+        <button class="btn btn-primary" type="submit">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add owner dialog -->
+  <dialog id="ownerDialog">
+    <h2>Add owner</h2>
+    <label>Find a user
+      <input id="userSearch" type="search" placeholder="Name, UPN, email or object ID" autocomplete="off">
+    </label>
+    <p class="muted small">Type at least 2 characters, then click a user to add them as an owner.</p>
+    <ul id="userResults" class="results static"></ul>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-close>Close</button>
+    </div>
+  </dialog>
+
+  <!-- Add API permission dialog -->
+  <dialog id="permDialog" class="wide">
+    <!-- Step 1: choose API -->
+    <div id="permStep1">
+      <h2>Request API permissions</h2>
+      <p class="muted small">Commonly used</p>
+      <div class="quick">
+        <button class="btn btn-ghost" type="button" data-api="00000003-0000-0000-c000-000000000000">Microsoft Graph</button>
+        <button class="btn btn-ghost" type="button" data-api="797f4846-ba00-4fd7-ba43-dac1f8f63013">Azure Service Management</button>
+        <button class="btn btn-ghost" type="button" data-api="00000003-0000-0ff1-ce00-000000000000">SharePoint</button>
+        <button class="btn btn-ghost" type="button" data-api="cfa8b339-82a2-471a-a3c9-0fc0be7a4093">Azure Key Vault</button>
+      </div>
+      <label>Or search APIs in your organization
+        <input id="apiSearch" type="search" placeholder="API name or application (client) ID" autocomplete="off">
+      </label>
+      <ul id="apiResults" class="results static"></ul>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+      </div>
+    </div>
+
+    <!-- Step 2: choose permissions -->
+    <form id="permStep2" class="hidden">
+      <h2 id="permApiName"></h2>
+      <div class="seg" role="radiogroup" aria-label="Permission type">
+        <label><input type="radio" name="permType" value="Scope" checked> Delegated permissions<span class="muted small">App acts as the signed-in user</span></label>
+        <label><input type="radio" name="permType" value="Role"> Application permissions<span class="muted small">App runs without a user (always needs admin consent)</span></label>
+      </div>
+      <input id="permFilter" type="search" placeholder="Filter permissions, e.g. User.Read" autocomplete="off">
+      <ul id="permList" class="perm-list"></ul>
+      <div class="dialog-actions spread">
+        <button id="permBack" class="btn btn-ghost" type="button">← Back</button>
+        <span>
+          <span id="permSelCount" class="muted small"></span>
+          <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+          <button id="permAddBtn" class="btn btn-primary" type="submit" disabled>Add permissions</button>
+        </span>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Federated credential dialog -->
+  <dialog id="ficDialog" class="wide">
+    <form id="ficForm" method="dialog">
+      <h2 id="ficTitle">Add a federated credential</h2>
+
+      <label id="ficScenarioWrap">Scenario
+        <select id="ficScenario">
+          <option value="github">GitHub Actions deploying Azure resources</option>
+          <option value="kubernetes">Kubernetes accessing Azure resources</option>
+          <option value="azdo">Azure DevOps service connection</option>
+          <option value="other">Other issuer</option>
+        </select>
+      </label>
+
+      <fieldset data-scenario="github">
+        <div class="row">
+          <label>Organization <input data-f="ghOrg" type="text" placeholder="contoso"></label>
+          <label>Repository <input data-f="ghRepo" type="text" placeholder="my-repo"></label>
+        </div>
+        <div class="row">
+          <label>Entity type
+            <select data-f="ghEntity">
+              <option value="environment">Environment</option>
+              <option value="branch">Branch</option>
+              <option value="pull_request">Pull request</option>
+              <option value="tag">Tag</option>
+            </select>
+          </label>
+          <label id="ghValueWrap">Value <input data-f="ghValue" type="text" placeholder="production"></label>
+        </div>
+      </fieldset>
+
+      <fieldset data-scenario="kubernetes" class="hidden">
+        <label>Cluster issuer URL <input data-f="k8sIssuer" type="url" placeholder="https://eastus.oic.prod-aks.azure.com/&lt;tenant&gt;/&lt;guid&gt;/"></label>
+        <div class="row">
+          <label>Namespace <input data-f="k8sNs" type="text" placeholder="default"></label>
+          <label>Service account <input data-f="k8sSa" type="text" placeholder="workload-sa"></label>
+        </div>
+      </fieldset>
+
+      <fieldset data-scenario="azdo" class="hidden">
+        <label>Organization ID (GUID) <input data-f="adoOrgId" type="text" placeholder="00000000-0000-0000-0000-000000000000"></label>
+        <div class="row">
+          <label>Organization name <input data-f="adoOrg" type="text" placeholder="contoso"></label>
+          <label>Project <input data-f="adoProject" type="text" placeholder="MyProject"></label>
+        </div>
+        <label>Service connection name <input data-f="adoConn" type="text" placeholder="my-azure-connection"></label>
+      </fieldset>
+
+      <fieldset data-scenario="other" class="hidden">
+        <label>Issuer <input data-f="otherIssuer" type="url" placeholder="https://issuer.example.com"></label>
+        <label>Subject identifier <input data-f="otherSubject" type="text" placeholder="value of the token's sub claim"></label>
+      </fieldset>
+
+      <div class="row">
+        <label>Name <input id="ficName" type="text" maxlength="120" placeholder="github-prod-deploy" required></label>
+        <label>Audience <input id="ficAudience" type="text" value="api://AzureADTokenExchange"></label>
+      </div>
+      <label>Description (optional) <input id="ficDesc" type="text" maxlength="600"></label>
+
+      <div class="preview">
+        <div><span class="muted">Issuer</span> <code id="ficPrevIssuer">—</code></div>
+        <div><span class="muted">Subject</span> <code id="ficPrevSubject">—</code></div>
+      </div>
+
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+        <button id="ficSubmit" class="btn btn-primary" type="submit">Add</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Show secret once -->
+  <dialog id="revealDialog">
+    <h2>Copy your new secret now</h2>
+    <p class="warn">This value is shown <strong>only once</strong>. Store it in your key vault or pipeline secret store before closing.</p>
+    <div class="reveal">
+      <code id="secretValue"></code>
+      <button id="copySecret" class="btn btn-primary" type="button">Copy</button>
+    </div>
+    <p class="muted">Secret ID: <code id="secretKeyId"></code> · Expires <span id="secretExpires"></span></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-close>I've saved it, close</button>
+    </div>
+  </dialog>
+
+  <!-- Confirm -->
+  <dialog id="confirmDialog">
+    <h2 id="confirmTitle">Are you sure?</h2>
+    <p id="confirmText"></p>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" type="button" data-close>Cancel</button>
+      <button id="confirmOk" class="btn btn-danger" type="button">Confirm</button>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

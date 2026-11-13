@@ -10,10 +10,10 @@
 [![Microsoft Graph](https://img.shields.io/badge/Microsoft_Graph-v1.0-0078D4?logo=microsoft&logoColor=white)](https://learn.microsoft.com/graph/overview)
 [![Auth](https://img.shields.io/badge/Auth-MSAL_%2B_PKCE-6E40C9)](https://learn.microsoft.com/entra/identity-platform/msal-overview)
 [![License](https://img.shields.io/badge/License-MIT-yellowgreen)](LICENSE)
-[![Stars](https://img.shields.io/github/stars/OWNER/REPO?style=social)](https://github.com/OWNER/REPO/stargazers)
-[![Forks](https://img.shields.io/github/forks/OWNER/REPO?style=social)](https://github.com/OWNER/REPO/network/members)
+[![Stars](https://img.shields.io/github/stars/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/stargazers)
+[![Forks](https://img.shields.io/github/forks/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/network/members)
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Report a Bug](https://github.com/OWNER/REPO/issues/new)
+[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Report a Bug](https://github.com/21bshwjt/Entra-Apps-Management/issues/new)
 
 </div>
 
@@ -126,7 +126,7 @@ flowchart LR
 
 ```bash
 # 1️⃣  Get the code
-git clone https://github.com/OWNER/REPO.git
+git clone https://github.com/21bshwjt/Entra-Apps-Management.git
 cd REPO
 
 # 2️⃣  Install dependencies

@@ -13,7 +13,7 @@
 [![Stars](https://img.shields.io/github/stars/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/stargazers)
 [![Forks](https://img.shields.io/github/forks/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/network/members)
 
-[Quick Start](#quick-start) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Report a Bug](https://github.com/21bshwjt/Entra-Apps-Management/issues/new)
+[Quick Start](#quick-start) · [Screenshots](#screenshots) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Report a Bug](https://github.com/21bshwjt/Entra-Apps-Management/issues/new)
 
 </div>
 
@@ -90,6 +90,30 @@ Search by name, UPN, email or object ID, then add or remove owners. **The last o
 </td>
 </tr>
 </table>
+
+---
+
+<a id="screenshots"></a>
+## 📸 Screenshots
+
+The left pane lists the apps you own, with a health dot (🟢 valid · 🟡 expiring · 🔴 expired) or ⛔ for a disabled app. The examples below show a **deactivated** app: it gets a red **Disabled** badge and a note explaining why, and can still be managed.
+
+### 🔑 Client secrets
+Create, rotate and delete secrets, with the expiry date and status of each.
+
+![Client secrets tab](docs/images/portal-client-secrets.png)
+
+### 📜 Certificates
+Upload a public certificate (.cer / .crt / .pem) and see each certificate's thumbprint, expiry date and status.
+
+![Certificates tab](docs/images/portal-certificates.png)
+
+### 🧩 API permissions
+See requested permissions with their consent status, add new ones, and open the admin consent page in Entra.
+
+![API permissions tab](docs/images/portal-api-permissions.png)
+
+<sub>App IDs, object IDs, thumbprints, secret hints and the signed-in user's name are blurred.</sub>
 
 ---
 
@@ -684,7 +708,7 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
  ┃ ┣ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
  ┃ ┗ 📜 security.js    # High-risk permission list, rate limits, issuer allowlist, certificate checks, security log
  ┣ 📂 data             # notify-state.json: what was e-mailed when (git-ignored)
- ┣ 📂 docs/images      # Sample e-mail screenshots used in this README
+ ┣ 📂 docs/images      # Portal screenshots and sample e-mails used in this README
  ┣ 📂 public
  ┃ ┣ 📜 index.html     # UI markup (tabs and dialogs)
  ┃ ┣ 📜 app.js         # UI logic

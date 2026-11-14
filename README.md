@@ -12,6 +12,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellowgreen)](LICENSE)
 [![Stars](https://img.shields.io/github/stars/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/stargazers)
 [![Forks](https://img.shields.io/github/forks/21bshwjt/Entra-Apps-Management?style=social)](https://github.com/21bshwjt/Entra-Apps-Management/network/members)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Follow_me-0A66C2?logo=linkedin&logoColor=white)](https://www.linkedin.com/in/bshwjt/)
 
 [Quick Start](#quick-start) · [Screenshots](#screenshots) · [How It Works](#how-it-works) · [Configuration](#configuration) · [Troubleshooting](#troubleshooting) · [Report a Bug](https://github.com/21bshwjt/Entra-Apps-Management/issues/new)
 
@@ -728,6 +729,8 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
 Built with ❤️ using **Node.js**, **MSAL** and **Microsoft Graph**
 
 ⭐ If this saved you a ticket, give the repo a star!
+
+[![Follow me on LinkedIn](https://img.shields.io/badge/Follow_me_on-LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/bshwjt/)
 
 [⬆ Back to top](#top)
 

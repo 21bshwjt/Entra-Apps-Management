@@ -88,6 +88,7 @@ input:focus, select:focus, .btn:focus-visible, .app-item:focus-visible { outline
 .empty { color: var(--muted); padding: 60px 0; text-align: center; }
 .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .detail-head h1 { font-size: 22px; word-break: break-word; }
+.head-actions { display: flex; gap: 8px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
 .meta { display: flex; flex-wrap: wrap; gap: 4px 20px; color: var(--muted); margin-top: 4px; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; overflow-x: auto; }

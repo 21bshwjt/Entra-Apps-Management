@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Disable app (one way):** owners can deactivate their app registration from its page (Graph beta `isDisabled = true`). The portal has no enable option; only an Entra administrator can reactivate the app. Logged as `app.disable`.
+
+### Fixed
+- The yellow "expiring soon" dot in the app list was drawn as a large rounded square.
+
 ## [1.2.0] - 2026-11-14
 
 Security hardening after a penetration-test style review.

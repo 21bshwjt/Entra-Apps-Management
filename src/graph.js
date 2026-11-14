@@ -62,6 +62,13 @@ module.exports = {
     (await call(t, 'GET', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}?$select=id,isDisabled`))
       .isDisabled === true,
 
+  /**
+   * Deactivate an app registration (Entra "State: Deactivated"; `isDisabled` is beta-only).
+   * There is deliberately NO matching "activate" helper: the portal can disable apps but never re-enable them.
+   */
+  deactivateApp: (t, id) =>
+    call(t, 'PATCH', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}`, { isDisabled: true }),
+
   /** Owners that are users (service principals that own the app are left out). */
   listUserOwners: (t, id) =>
     getAll(t, `/applications/${encodeURIComponent(id)}/owners/microsoft.graph.user?$select=id,displayName,mail,accountEnabled`),

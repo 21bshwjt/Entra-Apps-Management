@@ -164,6 +164,21 @@ router.get('/apps/:id', requireOwnership, wrap(async (req, res) => {
   });
 }));
 
+// --- Disable (one way) ----------------------------------------------------------
+/**
+ * Owners can deactivate their app. There is intentionally no "enable" route:
+ * re-activation must be done by an Entra administrator.
+ */
+router.post('/apps/:id/disable', requireOwnership, wrap(async (req, res) => {
+  if (await graph.isAppDeactivated(req.token, req.params.id).catch(() => false)) {
+    return res.json({ ok: true, alreadyDisabled: true });
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 200) || null;
+  await graph.deactivateApp(req.token, req.params.id);
+  audit(req, 'app.disable', { appId: req.app_.appId, appName: req.app_.displayName, reason });
+  res.json({ ok: true });
+}));
+
 /** Best effort (beta endpoint): if it fails, no app is reported as deactivated. */
 async function deactivatedIds(token) {
   try {

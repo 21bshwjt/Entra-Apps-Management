@@ -43,7 +43,7 @@ function status(end) {
 const badge = (s) => el('span', { class: `badge ${s.cls}` }, s.label);
 function disabledReason(app) {
   if (app.deactivated) return '⛔ This app registration is deactivated (App registrations → Overview → State: Deactivated). '
-    + 'No new tokens can be issued for it. You can still manage it here; an owner or admin can reactivate it with "Activate" in the Entra admin center.';
+    + 'No new tokens can be issued for it. You can still manage its credentials here, but it can only be re-enabled by an Entra administrator.';
   if (app.disabledByMicrosoft) return `⛔ Disabled by Microsoft (${app.disabledByMicrosoft}). The app can't sign in or get tokens. Contact your Entra admin.`;
   return '⛔ Sign-in is disabled for this app (Enterprise applications → Properties → "Enabled for users to sign-in?" = No). '
     + 'It can\'t sign in or get tokens until an admin re-enables it. You can still manage its credentials here.';
@@ -173,6 +173,8 @@ function renderDetail() {
   $('#dPrivNote').classList.toggle('hidden', !privileged);
   $('#dAppId').textContent = a.appId;
   $('#dObjId').textContent = a.id;
+  // One-way: shown only while the app is not deactivated; there is no "enable" button.
+  $('#disableAppBtn').classList.toggle('hidden', a.deactivated === true);
 
   // secrets
   const sRows = a.secrets
@@ -260,6 +262,20 @@ async function deleteSecret(s, btn) {
     await api('DELETE', `/api/apps/${state.current.id}/secrets/${s.keyId}`);
     toast('Secret deleted');
     await selectApp(state.current.id);
+  });
+}
+
+// ---------- disable app (one way) ----------
+async function disableApp(btn) {
+  const a = state.current;
+  if (!(await confirmAction('Disable this app?',
+    `"${a.displayName}" will be deactivated. No new tokens can be issued, so anything that signs in as this app will stop working `
+    + 'once its current tokens expire. You CANNOT re-enable it from this portal; only an Entra administrator can.',
+    'Disable app'))) return;
+  await busy(btn, async () => {
+    const r = await api('POST', `/api/apps/${a.id}/disable`, {});
+    toast(r.alreadyDisabled ? 'App was already disabled' : 'App disabled');
+    await selectApp(a.id);
   });
 }
 
@@ -583,6 +599,7 @@ document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () 
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
 $('#appFilter').addEventListener('input', renderAppList);
 $('#refreshBtn').addEventListener('click', () => state.current && selectApp(state.current.id));
+$('#disableAppBtn').addEventListener('click', (e) => state.current && disableApp(e.currentTarget));
 $('#newSecretBtn').addEventListener('click', openSecretDialog);
 $('#secretForm').addEventListener('submit', createSecret);
 $('#certForm').addEventListener('submit', uploadCert);

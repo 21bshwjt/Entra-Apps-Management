@@ -444,6 +444,8 @@ The left pane lists your apps, with a health dot: 🟢 all credentials valid · 
 
 A disabled app can't get new tokens, but you can still manage its credentials and owners here.
 
+**Disable app (one way).** On an app's page, **Disable app** deactivates the app registration (Graph beta `isDisabled = true`) after a confirmation. It's meant for apps that are no longer needed or may be compromised. **The portal has no Enable option:** to bring the app back, ask an Entra administrator to select **Activate** on the app registration in the Entra admin center. Each disable is written to the audit log as `app.disable`.
+
 <details>
 <summary><b>🔑 Client secrets</b></summary>
 
@@ -677,6 +679,7 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
 | `GET` | `/api/me` | Current user |
 | `GET` | `/api/apps` | Apps the user owns |
 | `GET` | `/api/apps/:id` | App details, owners and federated credentials |
+| `POST` | `/api/apps/:id/disable` | Deactivate the app `{reason?}`. One way: there is no enable route |
 | `POST` | `/api/apps/:id/secrets` | Add a secret `{displayName, months, replaceKeyId?}` |
 | `DELETE` | `/api/apps/:id/secrets/:keyId` | Delete a secret |
 | `POST` | `/api/apps/:id/certificates` | Upload a certificate `{content (base64), displayName?}` |

@@ -42,6 +42,21 @@ function securityLog(req, event, details = {}) {
   }));
 }
 
+/**
+ * True when a request was sent by the portal's own page.
+ * - Modern browsers send Sec-Fetch-Site, which pages cannot forge: only "same-origin" passes.
+ * - Otherwise the Origin header must match the Host. Browsers send "Origin: null" on form
+ *   POSTs under Referrer-Policy: no-referrer, so "null" alone is not trusted.
+ * - Requests with neither header (curl, scripts) cannot be cross-site browser requests.
+ */
+function isSameOrigin(req) {
+  const site = req.get('Sec-Fetch-Site');
+  if (site) return site === 'same-origin';
+  const origin = req.get('Origin');
+  if (!origin) return true;
+  try { return new URL(origin).host === req.get('Host'); } catch { return false; }
+}
+
 /** Simple fixed-window rate limiter kept in memory (fine for a single instance). */
 function rateLimit({ name, windowMs, max, key }) {
   const hits = new Map();
@@ -119,4 +134,4 @@ function certWeakness(cert, der) {
   return null;
 }
 
-module.exports = { HIGH_RISK, isHighRisk, securityLog, rateLimit, issuerAllowlist, certWeakness };
+module.exports = { HIGH_RISK, isHighRisk, securityLog, isSameOrigin, rateLimit, issuerAllowlist, certWeakness };

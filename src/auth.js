@@ -25,7 +25,7 @@ const cca = new msal.ConfidentialClientApplication({
   },
 });
 const crypto = new msal.CryptoProvider();
-const { securityLog } = require('./security');
+const { securityLog, isSameOrigin } = require('./security');
 
 /** Sessions end after this long without activity (also the cookie lifetime). */
 const SESSION_IDLE_MS = 60 * 60 * 1000;
@@ -120,14 +120,9 @@ router.get('/callback', async (req, res, next) => {
 router.get('/signout', (req, res) => res.redirect('/'));
 
 router.post('/signout', async (req, res) => {
-  const origin = req.get('Origin');
-  let sameOrigin = true;
-  if (origin) {
-    try { sameOrigin = new URL(origin).host === req.get('Host'); } catch { sameOrigin = false; }
-  }
-  if (!sameOrigin) {
-    securityLog(req, 'signout_bad_origin', { origin });
-    return res.status(403).type('text/plain').send('Bad origin');
+  if (!isSameOrigin(req)) {
+    securityLog(req, 'signout_bad_origin', { origin: req.get('Origin') || null, fetchSite: req.get('Sec-Fetch-Site') || null });
+    return res.status(403).type('text/plain').send('Sign-out must be started from the portal. Go back and use the Sign out button.');
   }
   const homeId = req.session?.user?.homeAccountId;
   if (homeId) await dropAccount(homeId);

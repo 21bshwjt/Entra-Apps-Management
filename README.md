@@ -314,6 +314,21 @@ There are **two kinds of e-mail**, each with its own subject, table and "What to
 
 When several are due on the same app, they share one e-mail, e.g. `Action required: 2 certificates expired or expiring – Payroll API`. An app gets **at most one secret e-mail and one certificate e-mail per day**. All owners are in **To**; there is no CC or BCC.
 
+#### 📬 Sample e-mails
+
+<table>
+<tr>
+<th width="50%">🔑 Client secret expiring <i>(sent daily)</i></th>
+<th width="50%">📜 Certificate expired <i>(sent weekly)</i></th>
+</tr>
+<tr>
+<td valign="top"><img src="docs/images/email-secret-expiring.png" alt="Sample e-mail: client secret expires in 12 days"></td>
+<td valign="top"><img src="docs/images/email-certificate-expired.png" alt="Sample e-mail: certificate expired 9 days ago"></td>
+</tr>
+</table>
+
+<sub>Sample data only (Payroll API, contoso.com). Expiring credentials get a yellow ⏳ banner and expired ones a red ❌ banner. The table shows the secret's <b>hint</b> or the certificate's <b>thumbprint</b>, and the button links to <code>PORTAL_URL</code>.</sub>
+
 ### 4.1 · Create the sender mailbox
 
 **Exchange admin center → Recipients → Mailboxes → Add a shared mailbox**, e.g. `entra-app-alerts@yourdomain.com`. A shared mailbox doesn't need a license.
@@ -669,6 +684,7 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
  ┃ ┣ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
  ┃ ┗ 📜 security.js    # High-risk permission list, rate limits, issuer allowlist, certificate checks, security log
  ┣ 📂 data             # notify-state.json: what was e-mailed when (git-ignored)
+ ┣ 📂 docs/images      # Sample e-mail screenshots used in this README
  ┣ 📂 public
  ┃ ┣ 📜 index.html     # UI markup (tabs and dialogs)
  ┃ ┣ 📜 app.js         # UI logic

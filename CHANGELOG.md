@@ -6,6 +6,7 @@
 - **Expiry e-mails to app owners** (optional, `NOTIFY_ENABLED=true`). The portal itself checks once a day, with no external scheduler:
   - every day from 30 days before a client secret or certificate expires;
   - once a week after it has expired, until it is deleted;
+  - separate e-mails for client secrets and certificates, each with its own subject and steps;
   - no e-mail for disabled apps;
   - sent to the app's owners only, from a shared mailbox limited through Exchange Online RBAC.
 - `npm run notify:check` (dry run) and `npm run notify:send-now`.

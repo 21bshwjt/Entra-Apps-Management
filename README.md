@@ -84,6 +84,7 @@ Search by name, UPN, email or object ID, then add or remove owners. **The last o
 ### 📧 Expiry e-mails *(optional)*
 - Owners get an e-mail **every day from 30 days before** a secret or certificate expires
 - **Once a week** after it has expired, until it is deleted
+- Separate e-mails for **client secrets** and **certificates**
 - **No e-mail for disabled apps**; sent by the portal itself, no scheduler needed
 
 </td>
@@ -299,7 +300,14 @@ The portal can e-mail app owners about expiring and expired client secrets and c
 | ⛔ App is **disabled** (deactivated, sign-in turned off, or disabled by Microsoft) | **None** | — |
 | 👤 App has no enabled owner with a mailbox | **None** (logged) | — |
 
-Each app gets **one e-mail per day at most**, listing every credential that is due. All owners are in **To**; there is no CC or BCC.
+There are **two kinds of e-mail**, each with its own subject, table and "What to do" steps:
+
+| E-mail | Example subject | Table shows |
+|---|---|---|
+| 🔑 **Client secret** | `Action required: Client secret expires in 12 days – Payroll API`<br>`Action required: Client secret expired 9 days ago – Payroll API` | Description, hint, expiry date, status |
+| 📜 **Certificate** | `Action required: Certificate expires in 5 days – Payroll API`<br>`Action required: Certificate expired 9 days ago – Payroll API` | Description, thumbprint, expiry date, status |
+
+When several are due on the same app, they share one e-mail, e.g. `Action required: 2 certificates expired or expiring – Payroll API`. An app gets **at most one secret e-mail and one certificate e-mail per day**. All owners are in **To**; there is no CC or BCC.
 
 ### 4.1 · Create the sender mailbox
 

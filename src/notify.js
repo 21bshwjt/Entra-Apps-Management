@@ -7,7 +7,7 @@
  *  - Secret or certificate has expired → one e-mail every NOTIFY_EXPIRED_EVERY_DAYS days, until it is deleted.
  *  - Disabled apps (deactivated, sign-in turned off, or disabled by Microsoft) → no e-mail.
  *  - Recipients: the app's owners only (enabled users with a mailbox), all in "To".
- *  - One e-mail per app per run, listing every credential that is due.
+ *  - Separate e-mails for client secrets and certificates (at most one of each per app per day).
  *
  * The check runs inside the portal: every 15 minutes it looks whether today's run
  * has happened yet and, once the clock is past NOTIFY_HOUR, runs it.
@@ -96,8 +96,12 @@ async function runOnce({ dryRun = false } = {}) {
   const candidates = [];
   for (const app of apps) {
     const creds = [
-      ...(app.passwordCredentials || []).map((c) => ({ ...c, kind: 'Client secret' })),
-      ...(app.keyCredentials || []).map((c) => ({ ...c, kind: 'Certificate' })),
+      ...(app.passwordCredentials || []).map((c) => ({ ...c, kind: 'secret', ref: c.hint ? `${c.hint}…` : '—' })),
+      ...(app.keyCredentials || []).map((c) => ({
+        ...c,
+        kind: 'certificate',
+        ref: c.customKeyIdentifier ? Buffer.from(c.customKeyIdentifier, 'base64').toString('hex').toUpperCase() : '—',
+      })),
     ];
     const due = [];
     for (const c of creds) {
@@ -155,32 +159,36 @@ async function runOnce({ dryRun = false } = {}) {
       continue;
     }
 
-    // 4. Send one e-mail per app.
-    const message = buildMessage(app, due, owners, cfg, now);
-    if (dryRun) {
+    // 4. Send separate e-mails for client secrets and certificates.
+    for (const kind of Object.keys(KINDS)) {
+      const items = due.filter((d) => d.kind === kind);
+      if (!items.length) continue;
+      const message = buildMessage(app, kind, items, owners, cfg, now);
+      if (dryRun) {
+        summary.emailed++;
+        console.log(`[notify] (dry run) Would e-mail ${owners.map((o) => o.mail).join(', ')}: "${message.subject}"`);
+        for (const d of items) console.log(`           - "${d.displayName || d.keyId}": ${statusText(d, now)}`);
+        continue;
+      }
+      try {
+        await graph.sendMail(token, cfg.sender, message);
+      } catch (e) {
+        summary.failed++;
+        const hint = e.status === 403 || e.status === 401
+          ? ' → check the Exchange Online "Application Mail.Send" role assignment for the portal and NOTIFY_SENDER.'
+          : '';
+        console.error(`[notify] Could not send ${kind} e-mail for "${name}": [${e.status}] ${e.message}${hint}`);
+        continue;
+      }
+      const sentAt = new Date(now).toISOString();
+      for (const d of items) state.sent[d.stateKey] = sentAt;
+      saveState(cfg.stateFile, state);
       summary.emailed++;
-      console.log(`[notify] (dry run) Would e-mail ${owners.map((o) => o.mail).join(', ')}: "${message.subject}"`);
-      for (const d of due) console.log(`           - ${d.kind} "${d.displayName || d.keyId}": ${statusText(d, now)}`);
-      continue;
+      console.log(JSON.stringify({
+        ts: sentAt, audit: true, user: 'system', action: 'notify.sent', type: kind,
+        appId: app.appId, appName: app.displayName, recipients: owners.length, keyIds: items.map((d) => d.keyId),
+      }));
     }
-    try {
-      await graph.sendMail(token, cfg.sender, message);
-    } catch (e) {
-      summary.failed++;
-      const hint = e.status === 403 || e.status === 401
-        ? ' → check the Exchange Online "Application Mail.Send" role assignment for the portal and NOTIFY_SENDER.'
-        : '';
-      console.error(`[notify] Could not send e-mail for "${name}": [${e.status}] ${e.message}${hint}`);
-      continue;
-    }
-    const sentAt = new Date(now).toISOString();
-    for (const d of due) state.sent[d.stateKey] = sentAt;
-    saveState(cfg.stateFile, state);
-    summary.emailed++;
-    console.log(JSON.stringify({
-      ts: sentAt, audit: true, user: 'system', action: 'notify.sent',
-      appId: app.appId, appName: app.displayName, recipients: owners.length, keyIds: due.map((d) => d.keyId),
-    }));
   }
 
   if (!dryRun) {
@@ -208,36 +216,73 @@ function statusText(d, now) {
   return `Expires in ${left} day${left === 1 ? '' : 's'}`;
 }
 
-function buildMessage(app, due, owners, cfg, now) {
+const KINDS = {
+  secret: {
+    one: 'Client secret', many: 'client secrets', refHeader: 'Hint',
+    steps: [
+      'Open the portal and create a new client secret (choose the old one under <b>Replace</b> to delete it in the same step).',
+      'Store the new value in Key Vault or your pipeline\'s secret store and update every system that uses it.',
+      'Delete the old secret once nothing uses it. Expired secrets no longer work; deleting them stops these reminders.',
+    ],
+  },
+  certificate: {
+    one: 'Certificate', many: 'certificates', refHeader: 'Thumbprint',
+    steps: [
+      'Get a new certificate and upload its <b>public</b> part (.cer / .crt / .pem) in the portal.',
+      'Deploy the new private key to every system that signs in with this certificate.',
+      'Delete the old certificate once nothing uses it. Expired certificates no longer work; deleting them stops these reminders.',
+    ],
+  },
+};
+
+function subjectFor(kind, items, name, now) {
+  const k = KINDS[kind];
+  if (items.length > 1) {
+    const anyExpired = items.some((d) => d.expired);
+    return `Action required: ${items.length} ${k.many} ${anyExpired ? 'expired or expiring' : 'expiring'} – ${name}`;
+  }
+  const d = items[0];
+  return `Action required: ${k.one} ${statusText(d, now).replace(/^E/, 'e')} – ${name}`;
+}
+
+function buildMessage(app, kind, items, owners, cfg, now) {
+  const k = KINDS[kind];
   const name = app.displayName || app.appId;
-  const anyExpired = due.some((d) => d.expired);
-  const subject = `${anyExpired ? 'Expired' : 'Expiring'} credential${due.length === 1 ? '' : 's'}: ${name}`;
-  const rows = due
+  const subject = subjectFor(kind, items, name, now);
+  const td = 'padding:8px 10px;border-bottom:1px solid #e1e4e8;vertical-align:top';
+  const rows = items
     .sort((a, b) => a.end - b.end)
     .map((d) => `<tr>
-        <td style="padding:6px 10px;border-bottom:1px solid #e1e4e8">${esc(d.kind)}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #e1e4e8">${esc(d.displayName || '(no description)')}</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #e1e4e8">${esc(fmtDate(d.end))} (UTC)</td>
-        <td style="padding:6px 10px;border-bottom:1px solid #e1e4e8;color:${d.expired ? '#a4262c' : '#8a5300'};font-weight:600">${esc(statusText(d, now))}</td>
+        <td style="${td}">${esc(d.displayName || '(no description)')}</td>
+        <td style="${td};font-family:Consolas,monospace;font-size:12px;word-break:break-all">${esc(d.ref)}</td>
+        <td style="${td};white-space:nowrap">${esc(fmtDate(d.end))} (UTC)</td>
+        <td style="${td};white-space:nowrap;color:${d.expired ? '#a4262c' : '#8a5300'};font-weight:600">${esc(statusText(d, now))}</td>
       </tr>`).join('');
+  const anyExpired = items.some((d) => d.expired);
+  const banner = anyExpired
+    ? `<div style="background:#fde7e9;color:#a4262c;padding:10px 12px;border-radius:6px;font-weight:600">❌ ${items.length === 1 ? `This ${k.one.toLowerCase()} has expired` : `Some of these ${k.many} have expired`}. Anything still using ${items.length === 1 ? 'it' : 'them'} can no longer sign in.</div>`
+    : `<div style="background:#fff4ce;color:#8a5300;padding:10px 12px;border-radius:6px;font-weight:600">⏳ ${items.length === 1 ? `This ${k.one.toLowerCase()} expires` : `These ${k.many} expire`} within ${cfg.daysBefore} days. Renew before the expiry date to avoid an outage.</div>`;
   const link = cfg.portalUrl
-    ? `<p><a href="${esc(cfg.portalUrl)}" style="display:inline-block;padding:8px 16px;background:#0f6cbd;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Open the Entra App Self-Service portal</a></p>`
-    : '<p>Open the Entra App Self-Service portal to renew or remove these credentials.</p>';
-  const content = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1f2328">
-    <p>Hello,</p>
-    <p>You are an owner of the Entra ID app registration <b>${esc(name)}</b> (App ID <code>${esc(app.appId)}</code>).
-       The following credential${due.length === 1 ? ' needs' : 's need'} your attention:</p>
-    <table style="border-collapse:collapse;font-size:13px">
+    ? `<p style="margin:20px 0"><a href="${esc(cfg.portalUrl)}" style="display:inline-block;padding:10px 18px;background:#0f6cbd;color:#fff;text-decoration:none;border-radius:6px;font-weight:600">Open the Entra App Self-Service portal</a></p>`
+    : '';
+  const content = `<div style="font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#1f2328;max-width:680px">
+    <h2 style="margin:0 0 12px;font-size:18px">${esc(k.one)} ${anyExpired ? 'expiry alert' : 'expiry reminder'}</h2>
+    ${banner}
+    <p>You are an owner of the Entra ID app registration <b>${esc(name)}</b><br>
+       <span style="color:#5f6b7a">App (client) ID: <code>${esc(app.appId)}</code></span></p>
+    <table style="border-collapse:collapse;font-size:13px;width:100%">
       <tr style="background:#f6f8fa;text-align:left">
-        <th style="padding:6px 10px">Type</th><th style="padding:6px 10px">Description</th>
-        <th style="padding:6px 10px">Expiry date</th><th style="padding:6px 10px">Status</th>
+        <th style="padding:8px 10px">Description</th><th style="padding:8px 10px">${k.refHeader}</th>
+        <th style="padding:8px 10px">Expiry date</th><th style="padding:8px 10px">Status</th>
       </tr>${rows}
     </table>
-    <p>Create a new secret or certificate, update the systems that use it, then delete the old one.
-       Expired credentials no longer work; delete them to stop these reminders.</p>
+    <p style="margin-top:18px"><b>What to do</b></p>
+    <ol style="padding-left:20px;margin:0">${k.steps.map((s) => `<li style="margin-bottom:6px">${s}</li>`).join('')}</ol>
     ${link}
-    <p style="color:#5f6b7a;font-size:12px">You get this e-mail daily from ${cfg.daysBefore} days before expiry,
-       and every ${cfg.expiredEvery} days once a credential has expired, until it is deleted.</p>
+    <p style="color:#5f6b7a;font-size:12px;border-top:1px solid #e1e4e8;padding-top:10px">
+       Sent automatically to the owners of this app. You get this e-mail every day from ${cfg.daysBefore} days before expiry,
+       and every ${cfg.expiredEvery} days after expiry until the ${k.one.toLowerCase()} is deleted.
+       No e-mails are sent while the app is disabled.</p>
   </div>`;
   return {
     subject,
@@ -280,7 +325,7 @@ function start() {
   setInterval(tick, TICK).unref();
 }
 
-module.exports = { start, runOnce };
+module.exports = { start, runOnce, buildMessage };
 
 // ---------- command line ----------
 if (require.main === module) {

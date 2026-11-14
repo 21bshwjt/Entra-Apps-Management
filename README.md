@@ -273,6 +273,14 @@ Open **http://localhost:3000** → **Sign in with Microsoft** 🎉
 
 The left pane lists your apps, with a health dot: 🟢 all credentials valid · 🟡 something expires within 30 days · 🔴 something has expired.
 
+⛔ marks a **disabled** app. That means one of:
+
+- the app registration is **deactivated** (*App registrations → Overview → State: Deactivated*; read from the Graph beta `isDisabled` property),
+- sign-in is turned off on its enterprise app (*Enterprise applications → Properties → Enabled for users to sign-in? = No*), or
+- Microsoft has disabled it.
+
+A disabled app can't get new tokens, but you can still manage its credentials and owners here.
+
 <details>
 <summary><b>🔑 Client secrets</b></summary>
 

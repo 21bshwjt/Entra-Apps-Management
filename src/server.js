@@ -55,7 +55,11 @@ app.use(express.json({ limit: '64kb' }));
 
 app.use('/auth', auth.router);
 app.use('/api', api);
-app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html' }));
+app.use(express.static(path.join(__dirname, '..', 'public'), {
+  index: 'index.html',
+  // Always revalidate so a browser never runs an old app.js after an update.
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 
 // Central error handler — never leak stack traces to the client.
 // eslint-disable-next-line no-unused-vars

@@ -64,17 +64,43 @@ router.get('/apps', wrap(async (req, res) => {
   const token = await getGraphToken(req);
   const apps = await graph.listOwnedApps(token);
   apps.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
-  res.json(apps.map(shapeApp));
+  const [spEnabled, deactivated] = await Promise.all([
+    spEnabledMap(token, apps.map((a) => a.appId)),
+    deactivatedIds(token),
+  ]);
+  res.json(apps.map((a) => shapeApp(a, spEnabled, deactivated)));
 }));
 
 router.get('/apps/:id', requireOwnership, wrap(async (req, res) => {
-  const [app, owners, federated] = await Promise.all([
+  const [app, owners, federated, spEnabled, deactivated] = await Promise.all([
     graph.getApp(req.token, req.params.id),
     graph.listOwners(req.token, req.params.id),
     graph.listFederated(req.token, req.params.id),
+    spEnabledMap(req.token, [req.app_.appId]),
+    deactivatedIds(req.token),
   ]);
-  res.json({ ...shapeApp(app), owners: owners.map(shapeOwner), federated: federated.map(shapeFederated) });
+  res.json({ ...shapeApp(app, spEnabled, deactivated), owners: owners.map(shapeOwner), federated: federated.map(shapeFederated) });
 }));
+
+/** Best effort (beta endpoint): if it fails, no app is reported as deactivated. */
+async function deactivatedIds(token) {
+  try {
+    return await graph.getDeactivatedAppIds(token);
+  } catch (e) {
+    console.warn(`Could not read app deactivation state: [${e.status}] ${e.message}`);
+    return null;
+  }
+}
+
+/** Best effort: if service principals can't be read, the enabled state is reported as unknown (null). */
+async function spEnabledMap(token, appIds) {
+  try {
+    return await graph.getSpEnabledMap(token, appIds);
+  } catch (e) {
+    console.warn(`Could not read service principal status: ${e.message}`);
+    return null;
+  }
+}
 
 // --- API permissions (requiredResourceAccess) -------------------------------
 const PERM_TYPES = new Set(['Scope', 'Role']);
@@ -453,13 +479,22 @@ function toDer(buf) {
   return buf;
 }
 
-function shapeApp(a) {
+function shapeApp(a, spEnabled, deactivatedSet) {
+  const deactivated = deactivatedSet ? deactivatedSet.has(a.id) : null;
+  // true / false from the service principal; null when there is no SP in this tenant or it couldn't be read.
+  const signInEnabled = spEnabled?.has(a.appId) ? spEnabled.get(a.appId) !== false : null;
+  const disabledByMicrosoft = !!a.disabledByMicrosoftStatus && a.disabledByMicrosoftStatus !== 'NotDisabled'
+    ? a.disabledByMicrosoftStatus : null;
   return {
     id: a.id,
     appId: a.appId,
     displayName: a.displayName,
     createdDateTime: a.createdDateTime,
     signInAudience: a.signInAudience,
+    signInEnabled,
+    disabledByMicrosoft,
+    deactivated,
+    disabled: deactivated === true || signInEnabled === false || !!disabledByMicrosoft,
     secrets: (a.passwordCredentials || []).map((p) => ({
       keyId: p.keyId, displayName: p.displayName, hint: p.hint,
       startDateTime: p.startDateTime, endDateTime: p.endDateTime,

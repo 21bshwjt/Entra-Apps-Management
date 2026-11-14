@@ -45,7 +45,7 @@ async function getAll(token, path, headers) {
 
 const spCache = new Map();
 
-const APP_FIELDS = 'id,appId,displayName,createdDateTime,signInAudience,passwordCredentials,keyCredentials';
+const APP_FIELDS = 'id,appId,displayName,createdDateTime,signInAudience,passwordCredentials,keyCredentials,disabledByMicrosoftStatus';
 
 module.exports = {
   GraphError,
@@ -113,6 +113,41 @@ module.exports = {
 
   setRequiredResourceAccess: (t, id, requiredResourceAccess) =>
     call(t, 'PATCH', `/applications/${encodeURIComponent(id)}`, { requiredResourceAccess }),
+
+  /**
+   * Map of appId -> service principal accountEnabled, for the given appIds.
+   * Apps with no service principal in this tenant are absent from the map.
+   * Not cached, so enabling/disabling shows up on the next refresh.
+   */
+  /**
+   * Object ids of owned apps that are deactivated (app registration "State: Deactivated").
+   * `isDisabled` is only exposed on the Graph beta endpoint.
+   */
+  getDeactivatedAppIds: async (t) => {
+    const apps = await getAll(t,
+      'https://graph.microsoft.com/beta/me/ownedObjects/microsoft.graph.application?$select=id,isDisabled&$top=999');
+    return new Set(apps.filter((a) => a.isDisabled === true).map((a) => a.id));
+  },
+
+  getSpEnabledMap: async (t, appIds) => {
+    const map = new Map();
+    const queue = [...appIds];
+    // Look up each app on its own (max 8 at a time) so one failure doesn't hide the rest.
+    const worker = async () => {
+      while (queue.length) {
+        const appId = queue.shift();
+        try {
+          const sp = await call(t, 'GET',
+            `/servicePrincipals(appId='${encodeURIComponent(appId)}')?$select=appId,accountEnabled`);
+          map.set(appId, sp.accountEnabled);
+        } catch (e) {
+          if (e.status !== 404) console.warn(`Service principal status for ${appId}: [${e.status}] ${e.message}`);
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, appIds.length) }, worker));
+    return map;
+  },
 
   /** Service principal for an appId in this tenant, or null if not present. Cached (scopes lists are large). */
   getServicePrincipalByAppId: async (t, appId) => {

@@ -41,6 +41,13 @@ function status(end) {
   return { label: 'Valid', cls: 'ok' };
 }
 const badge = (s) => el('span', { class: `badge ${s.cls}` }, s.label);
+function disabledReason(app) {
+  if (app.deactivated) return '⛔ This app registration is deactivated (App registrations → Overview → State: Deactivated). '
+    + 'No new tokens can be issued for it. You can still manage it here; an owner or admin can reactivate it with "Activate" in the Entra admin center.';
+  if (app.disabledByMicrosoft) return `⛔ Disabled by Microsoft (${app.disabledByMicrosoft}). The app can't sign in or get tokens. Contact your Entra admin.`;
+  return '⛔ Sign-in is disabled for this app (Enterprise applications → Properties → "Enabled for users to sign-in?" = No). '
+    + 'It can\'t sign in or get tokens until an admin re-enables it. You can still manage its credentials here.';
+}
 function worst(app) {
   const all = [...app.secrets, ...app.certificates].map((c) => status(c.endDateTime).cls);
   return all.includes('bad') ? 'bad' : all.includes('warn') ? 'warn' : all.length ? 'ok' : 'none';
@@ -122,7 +129,9 @@ function renderAppList() {
       type: 'button',
       onclick: () => selectApp(a.id),
     },
-    el('span', { class: `dot ${worst(a)}`, title: 'Credential health' }),
+    a.disabled
+      ? el('span', { class: 'disabled-icon', title: disabledReason(a), 'aria-label': 'Disabled' }, '⛔')
+      : el('span', { class: `dot ${worst(a)}`, title: 'Credential health' }),
     el('span', { class: 'app-text' },
       el('span', { class: 'app-name' }, a.displayName || '(no name)'),
       el('span', { class: 'app-id' }, a.appId)),
@@ -135,7 +144,10 @@ async function selectApp(id) {
     state.current = await api('GET', `/api/apps/${id}`);
     if (switched) loadPermissions();
     const i = state.apps.findIndex((a) => a.id === id);
-    if (i >= 0) state.apps[i] = { ...state.apps[i], secrets: state.current.secrets, certificates: state.current.certificates };
+    if (i >= 0) {
+      const { secrets, certificates, signInEnabled, disabledByMicrosoft, deactivated, disabled } = state.current;
+      state.apps[i] = { ...state.apps[i], secrets, certificates, signInEnabled, disabledByMicrosoft, deactivated, disabled };
+    }
     renderAppList();
     renderDetail();
   });
@@ -145,7 +157,9 @@ function renderDetail() {
   const a = state.current;
   $('#emptyState').classList.add('hidden');
   $('#appDetail').classList.remove('hidden');
-  $('#dName').textContent = a.displayName;
+  $('#dName').replaceChildren(a.displayName || '(no name)', a.disabled ? el('span', { class: 'badge bad' }, 'Disabled') : null);
+  $('#dDisabledNote').textContent = a.disabled ? disabledReason(a) : '';
+  $('#dDisabledNote').classList.toggle('hidden', !a.disabled);
   $('#dAppId').textContent = a.appId;
   $('#dObjId').textContent = a.id;
 

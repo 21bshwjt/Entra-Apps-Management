@@ -90,6 +90,10 @@ module.exports = {
   listOwners: (t, id) =>
     getAll(t, `/applications/${encodeURIComponent(id)}/owners?$select=id,displayName,userPrincipalName,mail,appId`),
 
+  /** A user by object id (404 if the id is not a user). Works with User.ReadBasic.All. */
+  getUser: (t, id) =>
+    call(t, 'GET', `/users/${encodeURIComponent(id)}?$select=id,displayName,userPrincipalName`),
+
   addOwner: (t, id, userId) =>
     call(t, 'POST', `/applications/${encodeURIComponent(id)}/owners/$ref`, {
       '@odata.id': `${GRAPH}/directoryObjects/${userId}`,

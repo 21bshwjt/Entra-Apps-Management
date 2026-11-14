@@ -1,6 +1,6 @@
 {
   "name": "entra-apps-management",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Self-service portal for Entra app registration owners: rotate secrets, manage certificates and owners.",
   "main": "src/server.js",
   "type": "commonjs",
@@ -10,9 +10,11 @@
     "notify:check": "node src/notify.js",
     "notify:send-now": "node src/notify.js --send"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=20"
+  },
   "dependencies": {
-    "@azure/msal-node": "^2.16.2",
+    "@azure/msal-node": "^7.2.2",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "express-session": "^1.18.1",

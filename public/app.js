@@ -157,9 +157,19 @@ function renderDetail() {
   const a = state.current;
   $('#emptyState').classList.add('hidden');
   $('#appDetail').classList.remove('hidden');
-  $('#dName').replaceChildren(a.displayName || '(no name)', a.disabled ? el('span', { class: 'badge bad' }, 'Disabled') : null);
+  const privileged = Array.isArray(a.privileged) && a.privileged.length > 0;
+  $('#dName').replaceChildren(a.displayName || '(no name)',
+    a.disabled ? el('span', { class: 'badge bad' }, 'Disabled') : null,
+    privileged ? el('span', { class: 'badge warn' }, 'High-risk permissions') : null);
   $('#dDisabledNote').textContent = a.disabled ? disabledReason(a) : '';
   $('#dDisabledNote').classList.toggle('hidden', !a.disabled);
+  $('#dPrivNote').textContent = privileged
+    ? `⚠️ This app holds high-risk permissions (${a.privileged.join(', ')}). `
+      + (a.privilegedMode === 'warn'
+        ? 'New secrets, certificates, federated credentials and owners are allowed but logged for review.'
+        : 'Adding secrets, certificates, federated credentials or owners is blocked here; ask an Entra administrator. You can still delete them.')
+    : '';
+  $('#dPrivNote').classList.toggle('hidden', !privileged);
   $('#dAppId').textContent = a.appId;
   $('#dObjId').textContent = a.id;
 
@@ -320,7 +330,7 @@ function renderPermissions() {
     }
     const st = STATUS[p.status] || STATUS.unknown;
     rows.push(el('tr', {},
-      el('td', { class: 'indent' }, el('div', { class: 'app-name' }, p.value), p.displayName ? el('div', { class: 'muted small' }, p.displayName) : null),
+      el('td', { class: 'indent' }, el('div', { class: 'app-name' }, p.value, p.highRisk ? el('span', { class: 'badge bad', title: 'Gives broad control over the tenant' }, 'High risk') : null), p.displayName ? el('div', { class: 'muted small' }, p.displayName) : null),
       el('td', {}, p.type === 'Role' ? 'Application' : 'Delegated'),
       el('td', {}, p.adminConsentRequired === null ? '—' : p.adminConsentRequired ? 'Yes' : 'No'),
       el('td', {}, badge(st)),
@@ -398,7 +408,10 @@ function renderPermList() {
     cb.addEventListener('change', () => { cb.checked ? perm.selected.add(key) : perm.selected.delete(key); updatePermCount(); });
     return el('li', {}, el('label', { class: already ? 'done' : '' }, cb,
       el('span', { class: 'perm-text' },
-        el('span', { class: 'app-name' }, p.value, p.adminConsentRequired ? el('span', { class: 'badge warn' }, 'Admin consent') : null, already ? el('span', { class: 'badge ok' }, 'Added') : null),
+        el('span', { class: 'app-name' }, p.value,
+          p.highRisk ? el('span', { class: 'badge bad', title: 'Gives broad control over the tenant; requests are logged for review' }, 'High risk') : null,
+          p.adminConsentRequired ? el('span', { class: 'badge warn' }, 'Admin consent') : null,
+          already ? el('span', { class: 'badge ok' }, 'Added') : null),
         el('span', { class: 'muted small' }, p.displayName))));
   });
   if (!source.length) items.push(el('li', { class: 'muted pad' }, `${perm.catalog.displayName} offers no ${type === 'Role' ? 'application' : 'delegated'} permissions.`));

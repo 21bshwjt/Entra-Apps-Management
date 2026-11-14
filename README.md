@@ -5,7 +5,7 @@
 
 **Free, self-hosted web portal where app owners sign in with Entra ID SSO and manage their own app registrations: secrets, certificates, federated credentials, API permissions and owners.**
 
-[![Node.js](https://img.shields.io/badge/Node.js-18%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
+[![Node.js](https://img.shields.io/badge/Node.js-20%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![Microsoft Entra ID](https://img.shields.io/badge/Microsoft_Entra_ID-SSO-0078D4?logo=microsoft&logoColor=white)](https://learn.microsoft.com/entra/identity/)
 [![Microsoft Graph](https://img.shields.io/badge/Microsoft_Graph-v1.0-0078D4?logo=microsoft&logoColor=white)](https://learn.microsoft.com/graph/overview)
 [![Auth](https://img.shields.io/badge/Auth-MSAL_%2B_PKCE-6E40C9)](https://learn.microsoft.com/entra/identity-platform/msal-overview)
@@ -126,7 +126,7 @@ flowchart LR
 
 | | Requirement | Notes |
 |---|---|---|
-| 🟩 | **Node.js 18 or later** | [nodejs.org](https://nodejs.org). Check with `node -v` |
+| 🟩 | **Node.js 20 or later** | [nodejs.org](https://nodejs.org). Check with `node -v`. Node 18 is end-of-life and no longer supported. |
 | 🏢 | **An Entra ID tenant** | Any work or school tenant. A free [M365 developer tenant](https://developer.microsoft.com/microsoft-365/dev-program) works for testing. |
 | 👑 | **An admin, once** | *Cloud Application Administrator*, *Privileged Role Administrator* or *Global Administrator*, to register the portal and grant consent |
 | 🌿 | **Git** *(optional)* | Or download the ZIP from GitHub |
@@ -238,6 +238,11 @@ Copy-Item .env.example .env       # Windows PowerShell
 | `NOTIFY_HOUR` | | Hour of the day (0–23, **server time**) when the daily check runs (default `8`) |
 | `PORTAL_URL` | | Link in the e-mail. Leave empty to use the address from `REDIRECT_URI` (e.g. `http://localhost:3000`) |
 | `NOTIFY_STATE_FILE` | | Where the "last e-mailed" record is kept (default `data/notify-state.json`) |
+| `SESSION_MAX_HOURS` | 🔒 | Sessions end after this many hours even when active (1–24, default `8`) |
+| `PRIVILEGED_APPS` | 🔒 | `block` *(default)*: no new credentials or owners on apps with high-risk permissions. `warn`: allow, but flag and log. |
+| `PROTECTED_APP_IDS` | 🔒 | Extra app (client) IDs to always treat as privileged, comma separated |
+| `FEDERATED_ALLOWED_ISSUERS` | 🔒 | Allowed federated credential issuers, comma separated. A `*` at the end matches the rest of the URL; elsewhere it matches one host label or path segment. `*` alone allows any `https` issuer. Empty = defaults: `https://token.actions.githubusercontent.com`, `https://vstoken.dev.azure.com/*`, `https://login.microsoftonline.com/<TENANT_ID>/v2.0`, `https://*.oic.prod-aks.azure.com/*` |
+| `ALLOW_GUEST_OWNERS` | 🔒 | `true` lets guests (`#EXT#`) be added as owners (default `false`) |
 
 🎲 Generate `SESSION_SECRET`:
 
@@ -416,7 +421,7 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 <br/>
 
 - Choose a `.cer`, `.crt` or `.pem` file containing the **public** certificate only, then click **Upload certificate**.
-- ❌ Rejected: files containing a private key (PFX, or PEM with a key), expired certificates, and duplicates.
+- ❌ Rejected: files containing a private key (PFX, or PEM with a key), expired certificates, duplicates, RSA keys under 2048 bits, and certificates signed with SHA-1 or MD5.
 
 </details>
 
@@ -435,6 +440,7 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 - The audience defaults to `api://AzureADTokenExchange`.
 - **Edit** changes the issuer, subject, audience and description. The **name can't be changed**.
 - Limits: 20 per app, `https://` issuers only, no wildcards, no duplicates.
+- 🔒 Only **allowed issuers** are accepted. The defaults are GitHub Actions, Azure DevOps, Entra ID (this tenant) and AKS. Other issuers (e.g. your own Kubernetes cluster) must be added to `FEDERATED_ALLOWED_ISSUERS` by the portal administrator.
 
 </details>
 
@@ -465,6 +471,25 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 
 - **+ Add owner:** type at least 2 characters of a name, UPN or email, or paste a full UPN or object ID, then click the user.
 - **Remove:** the last owner can't be removed. Removing **yourself** asks for confirmation, because you immediately lose access to the app.
+- 🔒 Only **users** can be added; guests (`#EXT#`) are blocked unless `ALLOW_GUEST_OWNERS=true`.
+
+</details>
+
+<details>
+<summary><b>⚠️ Apps with high-risk permissions</b></summary>
+
+<br/>
+
+An app is **privileged** when it has been *granted* a high-risk application permission, e.g. `Directory.ReadWrite.All`, `RoleManagement.ReadWrite.Directory`, `AppRoleAssignment.ReadWrite.All`, `User.ReadWrite.All`, `Mail.Send` or Exchange `full_access_as_app` (full list in [src/security.js](src/security.js)). Apps listed in `PROTECTED_APP_IDS` are privileged too.
+
+Whoever adds a secret, certificate or federated credential to such an app can act with those permissions. So on privileged apps:
+
+| `PRIVILEGED_APPS` | Add secret / certificate / federated credential / owner | Delete them |
+|---|---|---|
+| `block` *(default)* | ⛔ Blocked; the app page shows why. Ask an Entra administrator. | ✅ Allowed |
+| `warn` | ✅ Allowed, but flagged in the UI and written to the security log | ✅ Allowed |
+
+The **API permissions** tab and the **Add a permission** dialog also mark high-risk permissions with a red **High risk** badge, and every request for one is written to the security log.
 
 </details>
 
@@ -485,7 +510,13 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 | 🔍 "Search failed: …" when adding an owner | Check that `User.ReadBasic.All` is consented, and look for `[4xx]` lines in the server terminal. |
 | ⚪ Permission status "Unknown" | Add `DelegatedPermissionGrant.Read.All` (Delegated) and grant consent. |
 | 🚫 "You are not an owner of this application" | Ask a current owner to add you. |
-| ⏱️ "Session expired" | The 1-hour idle timeout ended, or the server restarted (sessions are in memory). Sign in again. |
+| ⏱️ "Session expired" | The 1-hour idle timeout or the `SESSION_MAX_HOURS` limit (default 8 hours) was reached, or the server restarted (sessions are in memory). Sign in again. |
+| ⛔ "This app holds high-risk permissions … blocked" | The app has a high-risk permission granted. Ask an Entra administrator, or set `PRIVILEGED_APPS=warn` if your policy allows owners to manage such apps. |
+| 🔗 "This issuer is not allowed" | Add the issuer to `FEDERATED_ALLOWED_ISSUERS` (comma separated, `*` wildcards allowed) and restart. |
+| 👥 "Guest users cannot be added as owners" | Intended. Set `ALLOW_GUEST_OWNERS=true` to allow guests. |
+| 📜 "The RSA key is 1024 bits …" / "signed with SHA-1" | Create a new certificate with an RSA 2048+ key and SHA-256. |
+| 🚦 "Too many requests" (429) | The per-user limit was hit (600 requests per 5 minutes, 30 changes per minute). Wait and retry. |
+| 🔢 `npm install` warns about the Node engine | Upgrade to Node.js 20 or later. |
 | 📧 `[notify] Expiry e-mails are off` | Set `NOTIFY_ENABLED=true` in `.env` and restart. |
 | 📧 `[notify] Run failed … Application.Read.All` | Add the Graph **Application** permissions from [Step 4.2](#notifications) and grant admin consent. |
 | 📧 `Could not send e-mail … [403]` | The Exchange role assignment from [Step 4.3](#notifications) is missing, not applied yet (wait up to 2 hours), or `NOTIFY_SENDER` is a different mailbox. |
@@ -496,10 +527,25 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 ## ☁️ Deploying (e.g. Azure App Service)
 
 - 🌐 Add `https://<host>/auth/callback` as a redirect URI and set `REDIRECT_URI` / `POST_LOGOUT_REDIRECT_URI` to match. Cookies become `Secure` automatically.
-- 🔒 Keep `CLIENT_SECRET` and `SESSION_SECRET` in **Key Vault** or App Settings. Consider a certificate for the portal's own credential.
-- 🧮 Sessions and the token cache are **in memory**. For more than one instance, use a shared store (e.g. Redis via `connect-redis`) and a distributed MSAL cache.
-- 🎯 Turn on **Assignment required** on the enterprise app to limit who can use the portal.
-- 📈 Send stdout to Log Analytics or your SIEM to keep the audit trail.
+- 🧮 Sessions, the token cache and rate limits are **in memory**. Run **one instance**. More instances would need a shared store (e.g. Redis via `connect-redis`) and a distributed MSAL cache, which this project doesn't include.
+- 🔢 Use the **Node 20 LTS** (or newer) runtime.
+
+### 🔒 App Service hardening checklist
+
+These are settings in Azure and Entra; none of them need code changes.
+
+| # | Setting | Where |
+|---|---|---|
+| 1 | **HTTPS Only** = On, **Minimum TLS** = 1.2 | App Service → Configuration → General settings |
+| 2 | **FTP** = Disabled, **SCM / FTP basic auth publishing** = Off, **Remote debugging** = Off | App Service → Configuration → General settings |
+| 3 | **Secrets in Key Vault:** store `CLIENT_SECRET` and `SESSION_SECRET` in Key Vault and reference them as `@Microsoft.KeyVault(SecretUri=…)` with a **managed identity**. Better still, replace `CLIENT_SECRET` with a certificate or a managed identity federated credential. | Key Vault + App Service → Identity |
+| 4 | **Access restrictions** on the app **and** the SCM (Kudu) site; ideally put **Front Door / Application Gateway with WAF** in front | App Service → Networking |
+| 5 | **Assignment required** = Yes on the portal's enterprise app; assign only the people who need it | Entra → Enterprise applications → Properties |
+| 6 | **Conditional Access** for the portal: require MFA (and a compliant device), and **block privileged admin roles** (e.g. Global / Application / Cloud Application Administrator) from using it | Entra → Conditional Access |
+| 7 | **Diagnostic settings** sending App Service console logs to Log Analytics / Sentinel; alert on `"security":true` events | App Service → Diagnostic settings |
+| 8 | **Microsoft Defender for App Service** = On | Defender for Cloud |
+| 9 | Mark `NOTIFY_*` as **deployment slot settings**, and keep `NOTIFY_ENABLED=false` in staging slots | App Service → Configuration |
+| 10 | Dependabot or `npm audit` in CI | GitHub → Settings → Code security |
 - 📧 **Expiry e-mails on App Service:**
   - turn on **Always On**, or the daily check stops when the site goes idle;
   - set `NOTIFY_STATE_FILE=/home/data/notify-state.json` so the record survives restarts and redeploys;
@@ -514,16 +560,21 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 | Control | Implementation |
 |---|---|
 | 🔐 **Authentication** | Entra OIDC auth-code flow with PKCE and `state` check; session ID regenerated after login |
-| 🎟️ **Tokens** | Kept server-side in the MSAL cache; the browser only has an HttpOnly, SameSite=Lax cookie (1-hour idle timeout) |
+| ⏱️ **Sessions** | HttpOnly, SameSite=Lax cookie (`Secure` on HTTPS); 1-hour idle timeout **and** an absolute limit (`SESSION_MAX_HOURS`, default 8 hours); expired sessions are purged from memory |
+| 🎟️ **Tokens** | Kept server-side in the MSAL cache, never sent to the browser. A user's tokens, including refresh tokens, are **removed from memory** when they sign out, after 1 hour idle, or at the absolute limit. |
 | 🧱 **Authorization** | Delegated Graph permissions **plus** a server-side `/me/ownedObjects` check on every action |
-| 🛑 **CSRF** | Writes require `X-Requested-With: fetch` and a same-origin `Origin` |
-| ✅ **Validation** | GUID-only IDs; names, URLs, subjects and lengths checked on the server |
-| 🔑 **Secrets** | Lifetime capped (≤ 24 months); value returned once, never stored or logged |
-| 📜 **Certificates** | Private keys, expired certificates and duplicates rejected; existing certificates preserved |
-| 🔗 **Federated** | `https` issuers only, no wildcards, duplicates rejected, 20-per-app limit |
-| 🧩 **Permissions** | Checked against the API's published scopes and roles; owners can only *request* them |
-| 👥 **Owners** | The last owner can't be removed; self-removal needs confirmation |
-| 🧢 **Headers** | `helmet`, strict CSP (no inline script or style), `frame-ancestors 'none'` |
+| ⚠️ **Privileged apps** | New credentials and owners are **blocked** on apps granted high-risk permissions (`PRIVILEGED_APPS=block`), so an owner can't use the portal to take over a powerful app. See [Apps with high-risk permissions](#-using-the-portal). |
+| 🛑 **CSRF** | Writes require `X-Requested-With: fetch` and a same-origin `Origin` (malformed or `null` origins are rejected). Sign-out is a same-origin POST. |
+| 🚦 **Rate limits** | Per user: 600 API requests per 5 minutes and 30 changes per minute. Per IP: 60 sign-in requests per 5 minutes. |
+| ✅ **Validation** | GUID-only IDs; names, URLs, subjects and lengths checked on the server; OData filter values escaped |
+| 🔑 **Secrets** | Lifetime capped (≤ 24 months); value returned once, never stored or logged; the secret being replaced is checked **before** the new one is created |
+| 📜 **Certificates** | Private keys, expired, duplicate and **weak** certificates (RSA < 2048 bits, SHA-1/MD5 signatures) rejected; existing certificates preserved |
+| 🔗 **Federated** | `https` issuers from an **allowlist** only (`FEDERATED_ALLOWED_ISSUERS`); no credentials, query or fragment in the issuer; no wildcards; duplicates rejected; 20-per-app limit |
+| 🧩 **Permissions** | Checked against the API's published scopes and roles; owners can only *request* them; **high-risk** permissions are badged and logged |
+| 👥 **Owners** | Users only (no service principals); guests blocked by default; the last owner can't be removed; self-removal needs confirmation |
+| 🧢 **Headers** | `helmet` (HSTS, nosniff and more), strict CSP (no inline script or style), `frame-ancestors 'none'`, `Cache-Control: no-store` on API and sign-in responses |
+| 🧾 **Logging** | Every change → audit log; every denial → security log (see below) |
+| 📦 **Dependencies** | `@azure/msal-node` 7.x, `npm audit` clean at release |
 | 📧 **Expiry e-mails** | Optional. App-only *read* permissions only; `Mail.Send` is limited to one shared mailbox through Exchange RBAC. Sent to owners only. |
 
 <details>
@@ -541,6 +592,33 @@ Every change writes one JSON line to stdout:
 
 </details>
 
+<details>
+<summary><b>🚨 Security log format</b></summary>
+
+<br/>
+
+Every denied or suspicious request writes one JSON line to stderr, with `"security":true`:
+
+```json
+{"ts":"2026-11-14T06:41:02.036Z","security":true,"event":"privileged_app_change_blocked","user":"jane@contoso.com","userOid":"…","ip":"203.0.113.7","method":"POST","path":"/api/apps/…/secrets","appId":"…","action":"secret.add","reasons":["Microsoft Graph: Directory.ReadWrite.All"]}
+```
+
+| Event | Meaning |
+|---|---|
+| `not_owner` | Tried to open or change an app the user doesn't own |
+| `csrf_header_missing` · `bad_origin` · `signout_bad_origin` | Request didn't come from the portal's own page; possible CSRF |
+| `rate_limited` | A user or IP hit a rate limit |
+| `privileged_app_change_blocked` · `privileged_app_change_allowed` | Credential or owner change on a privileged app (blocked, or allowed in `warn` mode) |
+| `privilege_check_failed` | The privileged-app check couldn't run, so the change was refused |
+| `high_risk_permission_requested` | An owner requested a high-risk API permission |
+| `federated_issuer_not_allowed` | A federated credential used an issuer outside the allowlist |
+| `guest_owner_blocked` | Tried to add a guest as an owner |
+| `session_max_lifetime_reached` | A session hit `SESSION_MAX_HOURS` |
+
+💡 In Log Analytics, alert on `security == true`, especially `not_owner`, `privileged_app_change_*` and `high_risk_permission_requested`.
+
+</details>
+
 ---
 
 ## 🔌 REST API reference
@@ -554,7 +632,8 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
 
 | Method | Route | Purpose |
 |---|---|---|
-| `GET` | `/auth/signin` · `/auth/callback` · `/auth/signout` | Sign in and sign out |
+| `GET` | `/auth/signin` · `/auth/callback` | Sign in |
+| `POST` | `/auth/signout` | Sign out (same-origin only) |
 | `GET` | `/api/me` | Current user |
 | `GET` | `/api/apps` | Apps the user owns |
 | `GET` | `/api/apps/:id` | App details, owners and federated credentials |
@@ -587,7 +666,8 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
  ┃ ┣ 📜 auth.js        # MSAL sign-in / callback / sign-out, token acquisition
  ┃ ┣ 📜 graph.js       # Microsoft Graph helpers
  ┃ ┣ 📜 api.js         # REST API, ownership guard, validation, audit log
- ┃ ┗ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
+ ┃ ┣ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
+ ┃ ┗ 📜 security.js    # High-risk permission list, rate limits, issuer allowlist, certificate checks, security log
  ┣ 📂 data             # notify-state.json: what was e-mailed when (git-ignored)
  ┣ 📂 public
  ┃ ┣ 📜 index.html     # UI markup (tabs and dialogs)

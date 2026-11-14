@@ -25,6 +25,40 @@ const cca = new msal.ConfidentialClientApplication({
   },
 });
 const crypto = new msal.CryptoProvider();
+const { securityLog } = require('./security');
+
+/** Sessions end after this long without activity (also the cookie lifetime). */
+const SESSION_IDLE_MS = 60 * 60 * 1000;
+/** ...and after this long in total, even when active. */
+const SESSION_MAX_MS = Math.min(Math.max(parseFloat(process.env.SESSION_MAX_HOURS) || 8, 1), 24) * 60 * 60 * 1000;
+
+/**
+ * Tokens (including refresh tokens) live in MSAL's in-memory cache. Track when each
+ * account was last used and remove it once its session can no longer be valid, so
+ * tokens don't stay in memory after users walk away.
+ */
+const activity = new Map(); // homeAccountId -> { lastSeen, loginAt }
+
+async function dropAccount(homeAccountId) {
+  activity.delete(homeAccountId);
+  try {
+    const account = await cca.getTokenCache().getAccountByHomeId(homeAccountId);
+    if (account) await cca.getTokenCache().removeAccount(account);
+  } catch { /* ignore */ }
+}
+
+setInterval(async () => {
+  const now = Date.now();
+  for (const [id, a] of activity) {
+    if (now - a.lastSeen > SESSION_IDLE_MS || now - a.loginAt > SESSION_MAX_MS) await dropAccount(id);
+  }
+  // Anything in the cache that no session is tracking (e.g. a half-finished sign-in) is removed too.
+  try {
+    for (const account of await cca.getTokenCache().getAllAccounts()) {
+      if (!activity.has(account.homeAccountId)) await cca.getTokenCache().removeAccount(account);
+    }
+  } catch { /* ignore */ }
+}, 5 * 60 * 1000).unref();
 
 const router = express.Router();
 
@@ -66,12 +100,15 @@ router.get('/callback', async (req, res, next) => {
     // Prevent session fixation: issue a new session id after login.
     req.session.regenerate((err) => {
       if (err) return next(err);
+      const now = Date.now();
       req.session.user = {
         homeAccountId: result.account.homeAccountId,
         oid: result.account.idTokenClaims?.oid,
         name: result.account.name,
         username: result.account.username,
+        loginAt: now,
       };
+      activity.set(result.account.homeAccountId, { lastSeen: now, loginAt: now });
       req.session.save((e) => (e ? next(e) : res.redirect('/')));
     });
   } catch (err) {
@@ -79,14 +116,21 @@ router.get('/callback', async (req, res, next) => {
   }
 });
 
-router.get('/signout', async (req, res) => {
-  const homeId = req.session?.user?.homeAccountId;
-  if (homeId) {
-    try {
-      const account = await cca.getTokenCache().getAccountByHomeId(homeId);
-      if (account) await cca.getTokenCache().removeAccount(account);
-    } catch { /* ignore */ }
+// Sign-out is a POST from the portal's own page, so other sites can't sign users out.
+router.get('/signout', (req, res) => res.redirect('/'));
+
+router.post('/signout', async (req, res) => {
+  const origin = req.get('Origin');
+  let sameOrigin = true;
+  if (origin) {
+    try { sameOrigin = new URL(origin).host === req.get('Host'); } catch { sameOrigin = false; }
   }
+  if (!sameOrigin) {
+    securityLog(req, 'signout_bad_origin', { origin });
+    return res.status(403).type('text/plain').send('Bad origin');
+  }
+  const homeId = req.session?.user?.homeAccountId;
+  if (homeId) await dropAccount(homeId);
   req.session.destroy(() => {
     const logout = new URL(`https://login.microsoftonline.com/${process.env.TENANT_ID}/oauth2/v2.0/logout`);
     logout.searchParams.set('post_logout_redirect_uri', process.env.POST_LOGOUT_REDIRECT_URI || '/');
@@ -97,7 +141,17 @@ router.get('/signout', async (req, res) => {
 
 /** Middleware: require a signed-in user for API routes. */
 function requireAuth(req, res, next) {
-  if (!req.session?.user) return res.status(401).json({ error: 'Not signed in' });
+  const user = req.session?.user;
+  if (!user) return res.status(401).json({ error: 'Not signed in' });
+  const now = Date.now();
+  if (!user.loginAt || now - user.loginAt > SESSION_MAX_MS) {
+    securityLog(req, 'session_max_lifetime_reached');
+    dropAccount(user.homeAccountId);
+    return req.session.destroy(() => res.status(401).json({ error: 'Session expired, please sign in again' }));
+  }
+  const a = activity.get(user.homeAccountId);
+  if (a) a.lastSeen = now;
+  else activity.set(user.homeAccountId, { lastSeen: now, loginAt: user.loginAt });
   next();
 }
 
@@ -130,4 +184,4 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-module.exports = { router, requireAuth, getGraphToken, getAppToken };
+module.exports = { router, requireAuth, getGraphToken, getAppToken, SESSION_IDLE_MS };

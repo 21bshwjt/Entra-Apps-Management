@@ -4,20 +4,42 @@ const express = require('express');
 const { X509Certificate, createHash } = require('crypto');
 const { requireAuth, getGraphToken } = require('./auth');
 const graph = require('./graph');
+const { HIGH_RISK, isHighRisk, securityLog, rateLimit, issuerAllowlist, certWeakness } = require('./security');
 
 const router = express.Router();
 const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_SECRET_MONTHS = Math.min(Math.max(parseInt(process.env.MAX_SECRET_MONTHS || '24', 10) || 24, 1), 24);
+/** "block" (default): no new credentials or owners on apps with high-risk permissions. "warn": allow, but flag and log. */
+const PRIVILEGED_MODE = String(process.env.PRIVILEGED_APPS || 'block').toLowerCase() === 'warn' ? 'warn' : 'block';
+/** Extra appIds always treated as privileged (comma separated). */
+const PROTECTED_APP_IDS = new Set(String(process.env.PROTECTED_APP_IDS || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
+const ALLOW_GUEST_OWNERS = String(process.env.ALLOW_GUEST_OWNERS || '').toLowerCase() === 'true';
+const ISSUERS = issuerAllowlist(process.env.FEDERATED_ALLOWED_ISSUERS);
 
 router.use(requireAuth);
+
+// --- Rate limits (per signed-in user) ----------------------------------------
+const userKey = (req) => req.session.user.oid || req.ip;
+router.use(rateLimit({ name: 'api', windowMs: 5 * 60 * 1000, max: 600, key: userKey }));
+const writeLimit = rateLimit({ name: 'api-write', windowMs: 60 * 1000, max: 30, key: userKey });
 
 // --- CSRF protection for state-changing requests ---------------------------
 router.use((req, res, next) => {
   if (req.method === 'GET') return next();
-  if (req.get('X-Requested-With') !== 'fetch') return res.status(403).json({ error: 'Missing CSRF header' });
+  if (req.get('X-Requested-With') !== 'fetch') {
+    securityLog(req, 'csrf_header_missing');
+    return res.status(403).json({ error: 'Missing CSRF header' });
+  }
   const origin = req.get('Origin');
-  if (origin && new URL(origin).host !== req.get('Host')) return res.status(403).json({ error: 'Bad origin' });
-  next();
+  if (origin) {
+    let host = null;
+    try { host = new URL(origin).host; } catch { /* "null" or malformed */ }
+    if (host !== req.get('Host')) {
+      securityLog(req, 'bad_origin', { origin });
+      return res.status(403).json({ error: 'Bad origin' });
+    }
+  }
+  writeLimit(req, res, next);
 });
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
@@ -48,9 +70,62 @@ const requireOwnership = wrap(async (req, res, next) => {
   req.token = await getGraphToken(req);
   const owned = await graph.listOwnedApps(req.token);
   const app = owned.find((a) => a.id === id);
-  if (!app) return res.status(403).json({ error: 'You are not an owner of this application' });
+  if (!app) {
+    securityLog(req, 'not_owner', { applicationObjectId: id });
+    return res.status(403).json({ error: 'You are not an owner of this application' });
+  }
   req.app_ = app;
   next();
+});
+
+// --- Privileged apps -------------------------------------------------------------
+/**
+ * An app is privileged when it has been GRANTED a high-risk application permission
+ * (Microsoft Graph / Exchange Online), or its appId is listed in PROTECTED_APP_IDS.
+ * Whoever adds a credential to such an app can act with those permissions.
+ * Cached for 5 minutes per app.
+ */
+const privCache = new Map();
+async function appPrivilege(token, app) {
+  const hit = privCache.get(app.appId);
+  if (hit && hit.exp > Date.now()) return hit.reasons;
+  const reasons = [];
+  if (PROTECTED_APP_IDS.has(app.appId.toLowerCase())) reasons.push('Marked as protected by the portal administrator');
+  const sp = await graph.getServicePrincipalByAppId(token, app.appId);
+  if (sp) {
+    const assignments = await graph.listAppRoleAssignments(token, sp.id);
+    for (const resourceAppId of Object.keys(HIGH_RISK)) {
+      const resource = await graph.getServicePrincipalByAppId(token, resourceAppId).catch(() => null);
+      if (!resource) continue;
+      for (const a of assignments.filter((x) => x.resourceId === resource.id)) {
+        const role = (resource.appRoles || []).find((r) => r.id === a.appRoleId);
+        if (role && isHighRisk(resourceAppId, role.value)) reasons.push(`${resource.displayName}: ${role.value}`);
+      }
+    }
+  }
+  privCache.set(app.appId, { reasons, exp: Date.now() + 5 * 60 * 1000 });
+  return reasons;
+}
+
+/** Guard for actions that give someone new access to the app (credentials, owners). */
+const guardPrivileged = (action) => wrap(async (req, res, next) => {
+  let reasons;
+  try {
+    reasons = await appPrivilege(req.token, req.app_);
+  } catch (e) {
+    securityLog(req, 'privilege_check_failed', { appId: req.app_.appId, action, error: e.message });
+    return res.status(503).json({ error: 'Could not check this app\'s permissions, so the change was not made. Try again later.' });
+  }
+  req.privileged = reasons;
+  if (!reasons.length) return next();
+  if (PRIVILEGED_MODE === 'warn') {
+    securityLog(req, 'privileged_app_change_allowed', { appId: req.app_.appId, action, reasons });
+    return next();
+  }
+  securityLog(req, 'privileged_app_change_blocked', { appId: req.app_.appId, action, reasons });
+  return res.status(403).json({
+    error: `This app holds high-risk permissions (${reasons.join(', ')}). Adding credentials or owners is blocked in the portal; ask an Entra administrator.`,
+  });
 });
 
 // --- Who am I ---------------------------------------------------------------
@@ -72,14 +147,21 @@ router.get('/apps', wrap(async (req, res) => {
 }));
 
 router.get('/apps/:id', requireOwnership, wrap(async (req, res) => {
-  const [app, owners, federated, spEnabled, deactivated] = await Promise.all([
+  const [app, owners, federated, spEnabled, deactivated, privileged] = await Promise.all([
     graph.getApp(req.token, req.params.id),
     graph.listOwners(req.token, req.params.id),
     graph.listFederated(req.token, req.params.id),
     spEnabledMap(req.token, [req.app_.appId]),
     deactivatedIds(req.token),
+    appPrivilege(req.token, req.app_).catch(() => null),
   ]);
-  res.json({ ...shapeApp(app, spEnabled, deactivated), owners: owners.map(shapeOwner), federated: federated.map(shapeFederated) });
+  res.json({
+    ...shapeApp(app, spEnabled, deactivated),
+    owners: owners.map(shapeOwner),
+    federated: federated.map(shapeFederated),
+    privileged, // array of reasons; [] = not privileged; null = could not check
+    privilegedMode: PRIVILEGED_MODE,
+  });
 }));
 
 /** Best effort (beta endpoint): if it fails, no app is reported as deactivated. */
@@ -112,9 +194,11 @@ function shapeCatalog(sp) {
     scopes: (sp.oauth2PermissionScopes || []).filter((s) => s.isEnabled !== false).map((s) => ({
       id: s.id, value: s.value, displayName: s.adminConsentDisplayName || s.userConsentDisplayName || s.value,
       description: s.adminConsentDescription || '', adminConsentRequired: s.type === 'Admin',
+      highRisk: isHighRisk(sp.appId, s.value),
     })).sort((a, b) => (a.value || '').localeCompare(b.value || '')),
     roles: (sp.appRoles || []).filter((r) => r.isEnabled !== false && (r.allowedMemberTypes || []).includes('Application')).map((r) => ({
       id: r.id, value: r.value, displayName: r.displayName || r.value, description: r.description || '', adminConsentRequired: true,
+      highRisk: isHighRisk(sp.appId, r.value),
     })).sort((a, b) => (a.value || '').localeCompare(b.value || '')),
   };
 }
@@ -160,6 +244,7 @@ router.get('/apps/:id/permissions', requireOwnership, wrap(async (req, res) => {
         value: value || ra.id,
         displayName: ra.type === 'Role' ? def?.displayName : (def?.adminConsentDisplayName || def?.userConsentDisplayName),
         adminConsentRequired: ra.type === 'Role' ? true : def ? def.type === 'Admin' : null,
+        highRisk: isHighRisk(r.resourceAppId, value),
         status,
       });
     }
@@ -221,10 +306,16 @@ router.post('/apps/:id/permissions', requireOwnership, wrap(async (req, res) => 
   }
   if (!added.length) return bad(res, 'All selected permissions are already configured');
   await graph.setRequiredResourceAccess(req.token, req.params.id, rra);
+  const describe = (p) => (p.type === 'Role' ? catalog.roles : catalog.scopes).find((x) => x.id === p.id);
+  const highRisk = added.filter((p) => describe(p)?.highRisk).map((p) => `${p.type}:${describe(p).value}`);
   audit(req, 'permission.add', {
     appId: req.app_.appId, appName: req.app_.displayName, resource: sp.displayName,
-    permissions: added.map((p) => `${p.type}:${(p.type === 'Role' ? catalog.roles : catalog.scopes).find((x) => x.id === p.id)?.value}`),
+    permissions: added.map((p) => `${p.type}:${describe(p)?.value}`),
+    highRisk,
   });
+  if (highRisk.length) {
+    securityLog(req, 'high_risk_permission_requested', { appId: req.app_.appId, resource: sp.displayName, permissions: highRisk });
+  }
   res.json({ ok: true, added: added.length });
 }));
 
@@ -260,7 +351,13 @@ function validateFederated(body, { requireName }) {
   let u;
   try { u = new URL(issuer); } catch { throw badReq('Issuer must be a valid URL'); }
   if (u.protocol !== 'https:') throw badReq('Issuer must be an https:// URL');
+  if (u.username || u.password || u.search || u.hash) throw badReq('Issuer must not contain credentials, "?" or "#"');
   if (issuer.length > 600) throw badReq('Issuer is too long (max 600)');
+  if (!ISSUERS.allows(issuer)) {
+    const e = badReq(`This issuer is not allowed. Allowed issuers: ${ISSUERS.patterns.join(', ')}. Ask the portal administrator to add it to FEDERATED_ALLOWED_ISSUERS.`);
+    e.securityEvent = { event: 'federated_issuer_not_allowed', issuer };
+    throw e;
+  }
   out.issuer = issuer;
 
   const subject = String(body?.subject || '').trim();
@@ -284,8 +381,18 @@ function badReq(msg) {
   return e;
 }
 
-router.post('/apps/:id/federated', requireOwnership, wrap(async (req, res) => {
-  const fic = validateFederated(req.body, { requireName: true });
+/** Validate, logging rejected issuers as security events. */
+function validateFederatedLogged(req, opts) {
+  try {
+    return validateFederated(req.body, opts);
+  } catch (e) {
+    if (e.securityEvent) securityLog(req, e.securityEvent.event, { appId: req.app_.appId, issuer: e.securityEvent.issuer });
+    throw e;
+  }
+}
+
+router.post('/apps/:id/federated', requireOwnership, guardPrivileged('federated.add'), wrap(async (req, res) => {
+  const fic = validateFederatedLogged(req, { requireName: true });
   const existing = await graph.listFederated(req.token, req.params.id);
   if (existing.length >= 20) return bad(res, 'An application can have at most 20 federated credentials');
   if (existing.some((f) => f.name.toLowerCase() === fic.name.toLowerCase())) return bad(res, 'A federated credential with this name already exists');
@@ -297,10 +404,10 @@ router.post('/apps/:id/federated', requireOwnership, wrap(async (req, res) => {
   res.json(shapeFederated(created));
 }));
 
-router.patch('/apps/:id/federated/:ficId', requireOwnership, wrap(async (req, res) => {
+router.patch('/apps/:id/federated/:ficId', requireOwnership, guardPrivileged('federated.update'), wrap(async (req, res) => {
   const { ficId } = req.params;
   if (!GUID.test(ficId)) return bad(res, 'Invalid federated credential id');
-  const patch = validateFederated(req.body, { requireName: false });
+  const patch = validateFederatedLogged(req, { requireName: false });
   const existing = await graph.listFederated(req.token, req.params.id);
   if (!existing.some((f) => f.id === ficId)) return res.status(404).json({ error: 'Federated credential not found' });
   if (existing.some((f) => f.id !== ficId && f.issuer === patch.issuer && f.subject === patch.subject)) {
@@ -323,11 +430,20 @@ router.delete('/apps/:id/federated/:ficId', requireOwnership, wrap(async (req, r
 }));
 
 // --- Secrets ----------------------------------------------------------------
-router.post('/apps/:id/secrets', requireOwnership, wrap(async (req, res) => {
+router.post('/apps/:id/secrets', requireOwnership, guardPrivileged('secret.add'), wrap(async (req, res) => {
   const displayName = String(req.body?.displayName || '').trim().slice(0, 100) || 'Created via self-service portal';
   const months = parseInt(req.body?.months, 10);
   if (!Number.isInteger(months) || months < 1 || months > MAX_SECRET_MONTHS) {
     return bad(res, `Expiry must be between 1 and ${MAX_SECRET_MONTHS} months`);
+  }
+  // Validate the secret being replaced BEFORE creating the new one, so a bad request
+  // never leaves behind a new secret whose value nobody received.
+  const replaceKeyId = req.body?.replaceKeyId ? String(req.body.replaceKeyId) : null;
+  if (replaceKeyId) {
+    if (!GUID.test(replaceKeyId)) return bad(res, 'Invalid secret id');
+    if (!(req.app_.passwordCredentials || []).some((p) => p.keyId === replaceKeyId)) {
+      return bad(res, 'The secret to replace was not found on this app');
+    }
   }
   const end = new Date();
   end.setMonth(end.getMonth() + months);
@@ -336,16 +452,15 @@ router.post('/apps/:id/secrets', requireOwnership, wrap(async (req, res) => {
 
   // Optionally remove the secret being rotated out.
   let removed = null;
-  const replaceKeyId = req.body?.replaceKeyId;
   if (replaceKeyId) {
-    if (!GUID.test(replaceKeyId)) return bad(res, 'Invalid secret id');
-    if ((req.app_.passwordCredentials || []).some((p) => p.keyId === replaceKeyId)) {
-      await graph.removePassword(req.token, req.params.id, replaceKeyId);
-      removed = replaceKeyId;
-    }
+    await graph.removePassword(req.token, req.params.id, replaceKeyId);
+    removed = replaceKeyId;
   }
 
-  audit(req, 'secret.add', { appId: req.app_.appId, appName: req.app_.displayName, keyId: created.keyId, months, replaced: removed });
+  audit(req, 'secret.add', {
+    appId: req.app_.appId, appName: req.app_.displayName, keyId: created.keyId, months, replaced: removed,
+    ...(req.privileged?.length ? { privileged: req.privileged } : {}),
+  });
   // secretText is returned ONCE and never logged or stored.
   res.json({
     keyId: created.keyId,
@@ -369,7 +484,7 @@ router.delete('/apps/:id/secrets/:keyId', requireOwnership, wrap(async (req, res
 }));
 
 // --- Certificates -----------------------------------------------------------
-router.post('/apps/:id/certificates', requireOwnership, wrap(async (req, res) => {
+router.post('/apps/:id/certificates', requireOwnership, guardPrivileged('certificate.add'), wrap(async (req, res) => {
   const b64 = String(req.body?.content || '');
   if (!b64) return bad(res, 'No certificate supplied');
 
@@ -390,6 +505,8 @@ router.post('/apps/:id/certificates', requireOwnership, wrap(async (req, res) =>
   const validFrom = new Date(cert.validFrom);
   const validTo = new Date(cert.validTo);
   if (validTo <= new Date()) return bad(res, 'Certificate has already expired');
+  const weakness = certWeakness(cert, der);
+  if (weakness) return bad(res, weakness);
 
   const thumbprintB64 = createHash('sha1').update(der).digest('base64');
   const existing = await graph.getKeyCredentials(req.token, req.params.id);
@@ -434,13 +551,28 @@ router.delete('/apps/:id/certificates/:keyId', requireOwnership, wrap(async (req
 }));
 
 // --- Owners -----------------------------------------------------------------
-router.post('/apps/:id/owners', requireOwnership, wrap(async (req, res) => {
+router.post('/apps/:id/owners', requireOwnership, guardPrivileged('owner.add'), wrap(async (req, res) => {
   const userId = String(req.body?.userId || '');
   if (!GUID.test(userId)) return bad(res, 'Invalid user id');
+
+  // Only users can be added (not service principals or groups), and guests only when allowed.
+  const user = await graph.getUser(req.token, userId).catch((e) => {
+    if (e.status === 404) return null;
+    throw e;
+  });
+  if (!user) return bad(res, 'Only users can be added as owners');
+  if (!ALLOW_GUEST_OWNERS && /#EXT#@/i.test(user.userPrincipalName || '')) {
+    securityLog(req, 'guest_owner_blocked', { appId: req.app_.appId, ownerId: userId });
+    return bad(res, 'Guest users cannot be added as owners');
+  }
+
   const owners = await graph.listOwners(req.token, req.params.id);
   if (owners.some((o) => o.id === userId)) return bad(res, 'User is already an owner');
   await graph.addOwner(req.token, req.params.id, userId);
-  audit(req, 'owner.add', { appId: req.app_.appId, appName: req.app_.displayName, ownerId: userId });
+  audit(req, 'owner.add', {
+    appId: req.app_.appId, appName: req.app_.displayName, ownerId: userId,
+    ...(req.privileged?.length ? { privileged: req.privileged } : {}),
+  });
   res.json({ ok: true });
 }));
 

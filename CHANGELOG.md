@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.2.0] - 2026-11-14
+
+Security hardening after a penetration-test style review.
+
+### Security
+- **Privileged apps:** new secrets, certificates, federated credentials and owners are blocked on apps granted high-risk permissions (e.g. `Directory.ReadWrite.All`, `RoleManagement.ReadWrite.Directory`). Configurable with `PRIVILEGED_APPS=block|warn` and `PROTECTED_APP_IDS`. The app page explains why.
+- **Token cleanup:** a user's cached tokens, including refresh tokens, are removed from memory on sign-out, after 1 hour idle, or at the absolute session limit.
+- **Absolute session lifetime:** `SESSION_MAX_HOURS` (default 8); expired sessions are purged from memory.
+- **Federated credential issuer allowlist:** `FEDERATED_ALLOWED_ISSUERS`; issuers with credentials, a query or a fragment are rejected.
+- **Owners:** only users can be added; guests are blocked unless `ALLOW_GUEST_OWNERS=true`.
+- **Rate limits:** per user on the API (600 requests per 5 minutes, 30 changes per minute) and per IP on sign-in (60 per 5 minutes).
+- **Security log:** every denial (not owner, CSRF, bad origin, rate limit, blocked change, disallowed issuer, guest owner) is logged as JSON with `"security":true`.
+- **High-risk API permissions** are badged in the UI and logged when requested.
+- **Weak certificates rejected:** RSA keys under 2048 bits and SHA-1/MD5 signatures.
+- **Sign-out is a same-origin POST**, so other sites can't sign users out.
+- `Cache-Control: no-store` on API and sign-in responses; error pages are plain text.
+
+### Fixed
+- Replacing a secret with an invalid `replaceKeyId` no longer leaves a new secret behind whose value nobody received.
+- A malformed or `null` `Origin` header returned 500; it is now rejected with 403.
+
+### Changed
+- `@azure/msal-node` upgraded from 2.x to 7.2.2 (`npm audit`: 0 vulnerabilities).
+- **Node.js 20 or later is now required** (Node 18 is end-of-life).
+- README: security settings, privileged apps, security log format and an App Service hardening checklist.
+
 ## [1.1.0] - 2026-11-14
 
 ### Added

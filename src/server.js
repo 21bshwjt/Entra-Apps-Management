@@ -15,6 +15,7 @@ const session = require('express-session');
 const helmet = require('helmet');
 const auth = require('./auth');
 const api = require('./api');
+const { rateLimit } = require('./security');
 
 const app = express();
 const isHttps = process.env.REDIRECT_URI.startsWith('https://');
@@ -35,8 +36,13 @@ app.use(helmet({
   },
 }));
 
+const sessionStore = new session.MemoryStore();
+// MemoryStore never removes expired sessions on its own; all() drops them as a side effect.
+setInterval(() => sessionStore.all(() => {}), 15 * 60 * 1000).unref();
+
 app.use(session({
   name: 'eam.sid',
+  store: sessionStore,
   secret: process.env.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -45,13 +51,22 @@ app.use(session({
     httpOnly: true,
     sameSite: 'lax',
     secure: isHttps,
-    maxAge: 60 * 60 * 1000, // 1 hour idle timeout
+    maxAge: auth.SESSION_IDLE_MS, // 1 hour idle timeout (absolute limit: SESSION_MAX_HOURS)
   },
   // NOTE: default MemoryStore is fine for a single instance. For multiple
   // instances use a shared store (e.g. connect-redis) and a distributed MSAL cache.
 }));
 
 app.use(express.json({ limit: '64kb' }));
+
+// API and sign-in responses must never be cached (they can contain secrets or tokens in redirects).
+app.use(['/api', '/auth'], (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+// Sign-in endpoints: limit per client IP.
+app.use('/auth', rateLimit({ name: 'auth', windowMs: 5 * 60 * 1000, max: 60, key: (req) => req.ip }));
 
 app.use('/auth', auth.router);
 app.use('/api', api);
@@ -69,7 +84,7 @@ app.use((err, req, res, _next) => {
   else console.warn(`[${status}] ${req.method} ${req.path}: ${err.code ? err.code + ' - ' : ''}${err.message}`);
   const message = status === 500 ? 'Internal server error' : err.message;
   if (req.path.startsWith('/api')) return res.status(status).json({ error: message, code: err.code });
-  res.status(status).send(message);
+  res.status(status).type('text/plain').send(message);
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);

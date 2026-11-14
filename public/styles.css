@@ -80,6 +80,8 @@ input:focus, select:focus, .btn:focus-visible, .app-item:focus-visible { outline
 .disabled-icon { flex: none; width: 9px; display: inline-flex; justify-content: center; font-size: 11px; line-height: 1; }
 .detail-head h1 .badge { margin-left: 10px; font-size: 12px; vertical-align: middle; }
 .warn.disabled-note { background: var(--bad-bg); color: var(--bad); margin: 10px 0 0; }
+.warn.priv-note { margin: 10px 0 0; }
+.inline-form { display: inline; margin: 0; }
 
 /* detail */
 .detail { padding: 24px 28px; overflow-y: auto; min-width: 0; }

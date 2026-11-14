@@ -158,9 +158,10 @@ function renderDetail() {
   $('#emptyState').classList.add('hidden');
   $('#appDetail').classList.remove('hidden');
   const privileged = Array.isArray(a.privileged) && a.privileged.length > 0;
-  $('#dName').replaceChildren(a.displayName || '(no name)',
+  // Built with el(), which skips null children (the native replaceChildren would print "null").
+  $('#dName').replaceChildren(el('span', {}, a.displayName || '(no name)',
     a.disabled ? el('span', { class: 'badge bad' }, 'Disabled') : null,
-    privileged ? el('span', { class: 'badge warn' }, 'High-risk permissions') : null);
+    privileged ? el('span', { class: 'badge warn' }, 'High-risk permissions') : null));
   $('#dDisabledNote').textContent = a.disabled ? disabledReason(a) : '';
   $('#dDisabledNote').classList.toggle('hidden', !a.disabled);
   $('#dPrivNote').textContent = privileged

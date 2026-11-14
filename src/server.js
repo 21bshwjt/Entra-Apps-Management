@@ -73,4 +73,7 @@ app.use((err, req, res, _next) => {
 });
 
 const port = parseInt(process.env.PORT || '3000', 10);
-app.listen(port, () => console.log(`Entra Apps Management portal listening on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`Entra Apps Management portal listening on http://localhost:${port}`);
+  require('./notify').start();
+});

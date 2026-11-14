@@ -54,6 +54,22 @@ module.exports = {
   listOwnedApps: (t) =>
     getAll(t, `/me/ownedObjects/microsoft.graph.application?$select=${APP_FIELDS}&$top=999`),
 
+  /** Every app registration in the tenant (needs an app-only token with Application.Read.All). */
+  listAllApps: (t) => getAll(t, `/applications?$select=${APP_FIELDS}&$top=999`),
+
+  /** True when the app registration is deactivated (`isDisabled` is only on the Graph beta endpoint). */
+  isAppDeactivated: async (t, id) =>
+    (await call(t, 'GET', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}?$select=id,isDisabled`))
+      .isDisabled === true,
+
+  /** Owners that are users (service principals that own the app are left out). */
+  listUserOwners: (t, id) =>
+    getAll(t, `/applications/${encodeURIComponent(id)}/owners/microsoft.graph.user?$select=id,displayName,mail,accountEnabled`),
+
+  /** Send an e-mail as `sender` (needs Mail.Send for that mailbox, e.g. via Exchange Online RBAC). */
+  sendMail: (t, sender, message) =>
+    call(t, 'POST', `/users/${encodeURIComponent(sender)}/sendMail`, { message, saveToSentItems: true }),
+
   getApp: (t, id) => call(t, 'GET', `/applications/${encodeURIComponent(id)}?$select=${APP_FIELDS}`),
 
   /** Returns keyCredentials INCLUDING the raw `key` (only returned on single-object $select). */

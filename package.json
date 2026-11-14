@@ -1,12 +1,14 @@
 {
   "name": "entra-apps-management",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Self-service portal for Entra app registration owners: rotate secrets, manage certificates and owners.",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "notify:check": "node src/notify.js",
+    "notify:send-now": "node src/notify.js --send"
   },
   "engines": { "node": ">=18" },
   "dependencies": {

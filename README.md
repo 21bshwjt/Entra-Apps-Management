@@ -73,10 +73,18 @@ App owners usually have to raise a ticket every time a client secret expires or 
 </td>
 </tr>
 <tr>
-<td colspan="2" valign="top">
+<td width="50%" valign="top">
 
 ### 👥 Owners
 Search by name, UPN, email or object ID, then add or remove owners. **The last owner can't be removed**, and removing yourself asks for confirmation.
+
+</td>
+<td width="50%" valign="top">
+
+### 📧 Expiry e-mails *(optional)*
+- Owners get an e-mail **every day from 30 days before** a secret or certificate expires
+- **Once a week** after it has expired, until it is deleted
+- **No e-mail for disabled apps**; sent by the portal itself, no scheduler needed
 
 </td>
 </tr>
@@ -96,10 +104,13 @@ flowchart LR
       A[🔐 MSAL<br/>auth code + PKCE]
       G[🧱 Ownership guard<br/>/me/ownedObjects]
       L[🧾 Audit log]
+      N[📧 Expiry e-mails<br/>daily check]
     end
 
     S -- "OIDC sign-in" --> E[(Microsoft<br/>Entra ID)]
     S -- "delegated token<br/>as the signed-in user" --> M[(Microsoft<br/>Graph v1.0)]
+    N -- "app-only token<br/>(optional)" --> X[(Exchange Online<br/>via Graph sendMail)]
+    X -- "e-mail" --> O([📬 App owners])
 ```
 
 | Layer | What protects you |
@@ -127,7 +138,7 @@ flowchart LR
 ```bash
 # 1️⃣  Get the code
 git clone https://github.com/21bshwjt/Entra-Apps-Management.git
-cd REPO
+cd Entra-Apps-Management
 
 # 2️⃣  Install dependencies
 npm install
@@ -219,6 +230,13 @@ Copy-Item .env.example .env       # Windows PowerShell
 | `POST_LOGOUT_REDIRECT_URI` | | Where to land after sign-out |
 | `PORT` | | Default `3000` |
 | `MAX_SECRET_MONTHS` | | Longest lifetime for new client secrets (1–24, default 24) |
+| `NOTIFY_ENABLED` | | `true` turns on expiry e-mails to owners (default `false`). See [Step 4](#notifications). |
+| `NOTIFY_SENDER` | 📧 | Shared mailbox the e-mails are sent from. Required when `NOTIFY_ENABLED=true`. |
+| `NOTIFY_DAYS_BEFORE` | | E-mail daily from this many days before expiry (default `30`) |
+| `NOTIFY_EXPIRED_EVERY_DAYS` | | After expiry, e-mail every this many days until the credential is deleted (default `7`) |
+| `NOTIFY_HOUR` | | Hour of the day (0–23, **server time**) when the daily check runs (default `8`) |
+| `PORTAL_URL` | | Link in the e-mail. Leave empty to use the address from `REDIRECT_URI` (e.g. `http://localhost:3000`) |
+| `NOTIFY_STATE_FILE` | | Where the "last e-mailed" record is kept (default `data/notify-state.json`) |
 
 🎲 Generate `SESSION_SECRET`:
 
@@ -266,6 +284,98 @@ Open **http://localhost:3000** → **Sign in with Microsoft** 🎉
 - **The non-owner path:** sign in as a user who owns nothing. The list should be empty.
 
 </details>
+
+---
+
+<a id="notifications"></a>
+## 📧 Step 4 · Expiry e-mails to owners *(optional)*
+
+The portal can e-mail app owners about expiring and expired client secrets and certificates. **No scheduler is needed:** while the portal is running, it checks once a day by itself.
+
+| Credential | E-mail | To |
+|---|---|---|
+| ⏳ Expires within **30 days** | **Every day** until it is renewed or deleted | Owners only |
+| ❌ **Expired** | **Once a week** until it is deleted | Owners only |
+| ⛔ App is **disabled** (deactivated, sign-in turned off, or disabled by Microsoft) | **None** | — |
+| 👤 App has no enabled owner with a mailbox | **None** (logged) | — |
+
+Each app gets **one e-mail per day at most**, listing every credential that is due. All owners are in **To**; there is no CC or BCC.
+
+### 4.1 · Create the sender mailbox
+
+**Exchange admin center → Recipients → Mailboxes → Add a shared mailbox**, e.g. `entra-app-alerts@yourdomain.com`. A shared mailbox doesn't need a license.
+
+### 4.2 · Give the portal application permissions
+
+**Entra admin center → App registrations → Entra App Self-Service → API permissions → Add a permission → Microsoft Graph → Application permissions:**
+
+| Permission | Why it's needed |
+|---|---|
+| `Application.Read.All` | Read every app's secrets, certificates, owners and disabled state |
+| `User.Read.All` | Read owners' e-mail addresses and whether their accounts are enabled |
+
+Then click **✅ Grant admin consent for &lt;tenant&gt;**.
+
+> [!WARNING]
+> **Do not add `Mail.Send` here.** In Entra it would let the portal send as *any* mailbox. Step 4.3 grants it for the shared mailbox only.
+
+### 4.3 · Allow sending from the shared mailbox only (Exchange Online RBAC)
+
+You need the portal's **Application (client) ID** and the **Object ID of its enterprise application** (*Enterprise applications → Entra App Self-Service → Overview*; this is **not** the object ID shown under App registrations).
+
+```powershell
+Install-Module ExchangeOnlineManagement   # once
+Connect-ExchangeOnline
+
+New-ServicePrincipal -AppId <portal-client-id> -ObjectId <enterprise-app-object-id> -DisplayName "Entra App Self-Service"
+
+New-ManagementScope -Name "EntraPortalSender" `
+  -RecipientRestrictionFilter "PrimarySmtpAddress -eq 'entra-app-alerts@yourdomain.com'"
+
+New-ManagementRoleAssignment -App <portal-client-id> -Role "Application Mail.Send" `
+  -CustomResourceScope "EntraPortalSender"
+
+# Check: InScope must be True for the shared mailbox...
+Test-ServicePrincipalAuthorization -Identity <portal-client-id> -Resource entra-app-alerts@yourdomain.com
+# ...and False for any other mailbox
+Test-ServicePrincipalAuthorization -Identity <portal-client-id> -Resource someone.else@yourdomain.com
+```
+
+> [!NOTE]
+> Exchange can take **up to 2 hours** to apply a new role assignment. Until then, sending fails with `403`.
+
+### 4.4 · Turn it on in `.env`
+
+```ini
+NOTIFY_ENABLED=true
+NOTIFY_SENDER=entra-app-alerts@yourdomain.com
+NOTIFY_DAYS_BEFORE=30
+NOTIFY_EXPIRED_EVERY_DAYS=7
+NOTIFY_HOUR=8
+PORTAL_URL=
+```
+
+`PORTAL_URL` is the link in the e-mail. Leave it empty to use the address from `REDIRECT_URI` (`http://localhost:3000/auth/callback` → `http://localhost:3000`).
+
+### 4.5 · Test, then restart
+
+```bash
+npm run notify:check       # 🔍 dry run: lists who WOULD get which e-mail; sends nothing
+npm run notify:send-now    # 📤 sends today's e-mails now (never sends the same e-mail twice in a day)
+```
+
+Restart the portal (**Ctrl+C**, then `npm start`). The terminal shows:
+
+```
+[notify] Expiry e-mails on: daily from 30 days before expiry, every 7 days after expiry, checked from 08:00 server time, sent from entra-app-alerts@yourdomain.com.
+```
+
+After each daily check it prints a summary line, and every e-mail sent is written to the [audit log](#security) as `notify.sent`.
+
+> [!IMPORTANT]
+> - **The portal must keep running.** No e-mails are sent while it's stopped; the next check after it starts catches up on that day.
+> - **Run one instance only.** Each instance would send its own copy of every e-mail.
+> - `data/notify-state.json` records what was sent. Deleting it means today's e-mails may be sent again. It is git-ignored.
 
 ---
 
@@ -368,6 +478,10 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 | ⚪ Permission status "Unknown" | Add `DelegatedPermissionGrant.Read.All` (Delegated) and grant consent. |
 | 🚫 "You are not an owner of this application" | Ask a current owner to add you. |
 | ⏱️ "Session expired" | The 1-hour idle timeout ended, or the server restarted (sessions are in memory). Sign in again. |
+| 📧 `[notify] Expiry e-mails are off` | Set `NOTIFY_ENABLED=true` in `.env` and restart. |
+| 📧 `[notify] Run failed … Application.Read.All` | Add the Graph **Application** permissions from [Step 4.2](#notifications) and grant admin consent. |
+| 📧 `Could not send e-mail … [403]` | The Exchange role assignment from [Step 4.3](#notifications) is missing, not applied yet (wait up to 2 hours), or `NOTIFY_SENDER` is a different mailbox. |
+| 📧 An owner got no e-mail | Their account is disabled, they have no mailbox (`mail` is empty), or the app is disabled. Run `npm run notify:check` to see why. |
 
 ---
 
@@ -378,6 +492,11 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 - 🧮 Sessions and the token cache are **in memory**. For more than one instance, use a shared store (e.g. Redis via `connect-redis`) and a distributed MSAL cache.
 - 🎯 Turn on **Assignment required** on the enterprise app to limit who can use the portal.
 - 📈 Send stdout to Log Analytics or your SIEM to keep the audit trail.
+- 📧 **Expiry e-mails on App Service:**
+  - turn on **Always On**, or the daily check stops when the site goes idle;
+  - set `NOTIFY_STATE_FILE=/home/data/notify-state.json` so the record survives restarts and redeploys;
+  - App Service runs on **UTC**, so `NOTIFY_HOUR` is UTC unless you set `WEBSITE_TIME_ZONE`;
+  - keep **one instance**, or each instance sends its own copy.
 
 ---
 
@@ -397,6 +516,7 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 | 🧩 **Permissions** | Checked against the API's published scopes and roles; owners can only *request* them |
 | 👥 **Owners** | The last owner can't be removed; self-removal needs confirmation |
 | 🧢 **Headers** | `helmet`, strict CSP (no inline script or style), `frame-ancestors 'none'` |
+| 📧 **Expiry e-mails** | Optional. App-only *read* permissions only; `Mail.Send` is limited to one shared mailbox through Exchange RBAC. Sent to owners only. |
 
 <details>
 <summary><b>🧾 Audit log format</b></summary>
@@ -409,7 +529,7 @@ Every change writes one JSON line to stdout:
 {"ts":"2026-11-13T10:15:02.123Z","audit":true,"user":"jane@contoso.com","userOid":"…","action":"secret.add","appId":"…","appName":"Payroll API","keyId":"…","months":6,"replaced":null}
 ```
 
-**Actions:** `secret.add` · `secret.remove` · `certificate.add` · `certificate.remove` · `federated.add` · `federated.update` · `federated.remove` · `permission.add` · `permission.remove` · `owner.add` · `owner.remove`
+**Actions:** `secret.add` · `secret.remove` · `certificate.add` · `certificate.remove` · `federated.add` · `federated.update` · `federated.remove` · `permission.add` · `permission.remove` · `owner.add` · `owner.remove` · `notify.sent` (user `system`)
 
 </details>
 
@@ -458,7 +578,9 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
  ┃ ┣ 📜 server.js      # Express app, session, security headers, error handler
  ┃ ┣ 📜 auth.js        # MSAL sign-in / callback / sign-out, token acquisition
  ┃ ┣ 📜 graph.js       # Microsoft Graph helpers
- ┃ ┗ 📜 api.js         # REST API, ownership guard, validation, audit log
+ ┃ ┣ 📜 api.js         # REST API, ownership guard, validation, audit log
+ ┃ ┗ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
+ ┣ 📂 data             # notify-state.json: what was e-mailed when (git-ignored)
  ┣ 📂 public
  ┃ ┣ 📜 index.html     # UI markup (tabs and dialogs)
  ┃ ┣ 📜 app.js         # UI logic
@@ -467,6 +589,7 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
  ┣ 📜 .gitignore
  ┣ 📜 package.json
  ┣ 📜 package-lock.json
+ ┣ 📜 CHANGELOG.md
  ┗ 📜 README.md
 ```
 

@@ -120,8 +120,14 @@ async function getGraphToken(req) {
   }
 }
 
+/** App-only Graph token (client credentials), used by the expiry e-mails. MSAL caches it. */
+async function getAppToken() {
+  const result = await cca.acquireTokenByClientCredential({ scopes: ['https://graph.microsoft.com/.default'] });
+  return result.accessToken;
+}
+
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-module.exports = { router, requireAuth, getGraphToken };
+module.exports = { router, requireAuth, getGraphToken, getAppToken };

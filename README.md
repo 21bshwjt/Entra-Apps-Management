@@ -153,7 +153,12 @@ flowchart LR
 | **Portal** | Before every action, the server re-checks that the app is in `/me/ownedObjects`. Even admins only see their **own** apps here. |
 | **Browser** | Never sees a token. It only holds an HttpOnly, SameSite session cookie. |
 
-**What `/auth/callback` returns after sign-in** (for example in the browser's developer tools, *Network* tab):
+**What `/auth/callback` returns after sign-in.** To check it:
+
+1. Open a private browser window and press **F12** (macOS: **⌥⌘I**) to open the developer tools, then go to the **Network** tab.
+2. Tick **Preserve log**, so the request is kept when the page redirects.
+3. Type `callback?code=` in the **Filter** box.
+4. Sign in to the portal, then look at the **Status** column of the `callback?code=…` request:
 
 | Who signs in | Status code | Meaning |
 |---|---|---|

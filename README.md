@@ -153,6 +153,13 @@ flowchart LR
 | **Portal** | Before every action, the server re-checks that the app is in `/me/ownedObjects`. Even admins only see their **own** apps here. |
 | **Browser** | Never sees a token. It only holds an HttpOnly, SameSite session cookie. |
 
+**What `/auth/callback` returns after sign-in** (for example in the browser's developer tools, *Network* tab):
+
+| Who signs in | Status code | Meaning |
+|---|---|---|
+| 👤 **Tenant user** (member) | `302 Found` | Sign-in succeeded. The portal created the session and sent the browser on to the portal home page. |
+| 🧳 **Guest user** (B2B) | `403 Forbidden` | The guest check stopped them. No session was created and their tokens were discarded. The server logs `"event":"guest_signin_blocked"`. |
+
 ---
 
 ## 📋 Prerequisites
@@ -556,6 +563,7 @@ The **API permissions** tab and the **Add a permission** dialog also mark high-r
 | ❌ `AADSTS65001` consent required | Grant admin consent for the portal's permissions. |
 | ❌ `AADSTS7000215` invalid client secret | You used the secret **ID** instead of its **Value**, or the secret expired. |
 | ❌ `EADDRINUSE :::3000` | Another server is running. Press **Ctrl+C**, or end Node (Windows: `Get-Process node \| Stop-Process -Force`; macOS/Linux: `pkill node`), or change `PORT` and both URLs. |
+| 🚫 "Guest accounts cannot use this portal" (`403 Forbidden`) | Expected for guest (B2B) accounts; only members of your tenant can sign in. If a **member** gets this, check the `guest_signin_blocked` line in the server terminal and make sure `TENANT_ID` in `.env` is your tenant's GUID (not a domain name). |
 | 🔄 New buttons or tabs don't appear | Cached files. Press **Ctrl+F5**. |
 | 🔍 "Search failed: …" when adding an owner | Check that `User.ReadBasic.All` is consented, and look for `[4xx]` lines in the server terminal. |
 | ⚪ Permission status "Unknown" | Add `DelegatedPermissionGrant.Read.All` (Delegated) and grant consent. |

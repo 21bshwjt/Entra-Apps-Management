@@ -20,6 +20,28 @@
 
 ---
 
+## 📑 Table of contents
+
+- [💡 Why?](#why)
+- [✨ Features](#features)
+- [📸 Screenshots](#screenshots)
+- [🏗️ How it works](#how-it-works)
+- [📋 Prerequisites](#prerequisites)
+- [🚀 Quick start](#quick-start)
+- [🔐 Step 1 · Register the portal in Entra ID](#register)
+- [⚙️ Step 2 · Configure `.env`](#configuration)
+- [▶️ Step 3 · Run](#run)
+- [📧 Step 4 · Expiry e-mails to owners *(optional)*](#notifications)
+- [📖 Using the portal](#using)
+- [🧯 Troubleshooting](#troubleshooting)
+- [☁️ Deploying (e.g. Azure App Service)](#deploying)
+- [🛡️ Security](#security)
+- [🔌 REST API reference](#rest-api)
+- [📁 Project structure](#project-structure)
+
+---
+
+<a id="why"></a>
 ## 💡 Why?
 
 App owners usually have to raise a ticket every time a client secret expires or a pipeline needs a new federated credential. This portal lets owners do it themselves, safely:
@@ -31,6 +53,7 @@ App owners usually have to raise a ticket every time a client secret expires or 
 
 ---
 
+<a id="features"></a>
 ## ✨ Features
 
 <table>
@@ -167,6 +190,7 @@ flowchart LR
 
 ---
 
+<a id="prerequisites"></a>
 ## 📋 Prerequisites
 
 | | Requirement | Notes |
@@ -202,6 +226,7 @@ npm start                       # 👉 http://localhost:3000
 
 ---
 
+<a id="register"></a>
 ## 🔐 Step 1 · Register the portal in Entra ID
 
 <details open>
@@ -300,6 +325,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 ---
 
+<a id="run"></a>
 ## ▶️ Step 3 · Run
 
 ```bash
@@ -452,6 +478,7 @@ After each daily check it prints a summary line, and every e-mail sent is writte
 
 ---
 
+<a id="using"></a>
 ## 📖 Using the portal
 
 The left pane lists your apps, with a health dot: 🟢 all credentials valid · 🟡 something expires within 30 days · 🔴 something has expired.
@@ -587,6 +614,7 @@ The **API permissions** tab and the **Add a permission** dialog also mark high-r
 
 ---
 
+<a id="deploying"></a>
 ## ☁️ Deploying (e.g. Azure App Service)
 
 - 🌐 Add `https://<host>/auth/callback` as a redirect URI and set `REDIRECT_URI` / `POST_LOGOUT_REDIRECT_URI` to match. Cookies become `Secure` automatically.
@@ -684,6 +712,7 @@ Every denied or suspicious request writes one JSON line to stderr, with `"securi
 
 ---
 
+<a id="rest-api"></a>
 ## 🔌 REST API reference
 
 <details>
@@ -721,6 +750,7 @@ All routes need a signed-in session. Routes under `/api/apps/:id` also require t
 
 ---
 
+<a id="project-structure"></a>
 ## 📁 Project structure
 
 ```

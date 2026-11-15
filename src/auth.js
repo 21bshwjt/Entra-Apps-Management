@@ -97,6 +97,22 @@ router.get('/callback', async (req, res, next) => {
       codeVerifier: flow.verifier,
     });
 
+    // Block guest (B2B) accounts: only members of this tenant may use the portal.
+    const claims = result.account.idTokenClaims || {};
+    const homeTenant = (result.account.homeAccountId || '').split('.')[1];
+    const isGuest = !!claims.idp // signed in via another tenant / identity provider
+      || claims.acct === 1 // optional "acct" claim: 1 = guest (if configured)
+      || (!!homeTenant && homeTenant.toLowerCase() !== String(process.env.TENANT_ID).toLowerCase())
+      || /#EXT#/i.test(claims.preferred_username || result.account.username || '');
+    if (isGuest) {
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(), security: true, event: 'guest_signin_blocked',
+        user: result.account.username, oid: claims.oid, ip: req.ip,
+      }));
+      if (result.account) await cca.getTokenCache().removeAccount(result.account).catch(() => {});
+      return res.status(403).type('text/plain').send('Guest accounts cannot use this portal. Sign in with your organisation account.');
+    }
+
     // Prevent session fixation: issue a new session id after login.
     req.session.regenerate((err) => {
       if (err) return next(err);

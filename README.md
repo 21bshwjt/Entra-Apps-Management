@@ -123,15 +123,22 @@ See requested permissions with their consent status, add new ones, and open the 
 
 ```mermaid
 flowchart LR
-    U([👤 App owner<br/>browser]) -- "session cookie<br/>(HttpOnly)" --> S
+    U([👤 App owner<br/>member user]) -- "session cookie<br/>(HttpOnly)" --> S
 
     subgraph S [Node.js / Express portal]
       direction TB
       A[🔐 MSAL<br/>auth code + PKCE]
+      B{🚧 Guest check<br/>idp · home tenant · acct}
       G[🧱 Ownership guard<br/>/me/ownedObjects]
       L[🧾 Audit log]
       N[📧 Expiry e-mails<br/>daily check]
+      A --> B
+      B -- "member ✅" --> G
+      G --> L
     end
+
+    GU([🧳 Guest user<br/>B2B / external]) -. "tries to sign in" .-> A
+    B -- "guest ❌<br/>403, no session" --> D([🚫 Access denied<br/>security log])
 
     S -- "OIDC sign-in" --> E[(Microsoft<br/>Entra ID)]
     S -- "delegated token<br/>as the signed-in user" --> M[(Microsoft<br/>Graph v1.0)]
@@ -142,6 +149,7 @@ flowchart LR
 | Layer | What protects you |
 |---|---|
 | **Entra ID** | Delegated permissions mean Graph applies the *user's* own rights, so a normal user can only change apps they own |
+| **Sign-in** | **Guest (B2B) accounts are refused**: no session is created, their tokens are discarded and the attempt is logged as `guest_signin_blocked`. Only members of your tenant get in. |
 | **Portal** | Before every action, the server re-checks that the app is in `/me/ownedObjects`. Even admins only see their **own** apps here. |
 | **Browser** | Never sees a token. It only holds an HttpOnly, SameSite session cookie. |
 
@@ -601,7 +609,7 @@ These are settings in Azure and Entra; none of them need code changes.
 
 | Control | Implementation |
 |---|---|
-| 🔐 **Authentication** | Entra OIDC auth-code flow with PKCE and `state` check; session ID regenerated after login |
+| 🔐 **Authentication** | Entra OIDC auth-code flow with PKCE and `state` check; session ID regenerated after login. **Guest (B2B) accounts are refused** at sign-in (403, logged as `guest_signin_blocked`); also set *Assignment required = Yes* on the enterprise app and assign only member users |
 | ⏱️ **Sessions** | HttpOnly, SameSite=Lax cookie (`Secure` on HTTPS); 1-hour idle timeout **and** an absolute limit (`SESSION_MAX_HOURS`, default 8 hours); expired sessions are purged from memory |
 | 🎟️ **Tokens** | Kept server-side in the MSAL cache, never sent to the browser. A user's tokens, including refresh tokens, are **removed from memory** when they sign out, after 1 hour idle, or at the absolute limit. |
 | 🧱 **Authorization** | Delegated Graph permissions **plus** a server-side `/me/ownedObjects` check on every action |

@@ -5,6 +5,9 @@
 ### Added
 - **Disable app (one way):** owners can deactivate their app registration from its page (Graph beta `isDisabled = true`). The portal has no enable option; only an Entra administrator can reactivate the app. Logged as `app.disable`.
 
+### Security
+- **Guest (B2B) accounts are blocked at sign-in** with a 403 and logged as `guest_signin_blocked`. For defence in depth, also set *Assignment required = Yes* on the enterprise app and assign only member users.
+
 ### Fixed
 - The yellow "expiring soon" dot in the app list was drawn as a large rounded square.
 

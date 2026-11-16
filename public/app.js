@@ -119,8 +119,20 @@ function renderAppList() {
   const apps = state.apps.filter((a) => !q || a.displayName?.toLowerCase().includes(q) || a.appId.includes(q));
   $('#appCount').textContent = `(${state.apps.length})`;
   const list = $('#appList');
-  if (!state.apps.length) {
+  const none = !state.apps.length;
+  $('#appFilter').classList.toggle('hidden', none);
+  if (none) {
     list.replaceChildren(el('li', { class: 'muted pad' }, 'You do not own any app registrations.'));
+    $('#emptyState').replaceChildren(
+      el('div', { class: 'empty-icon', 'aria-hidden': 'true' }, '📭'),
+      el('h3', {}, 'You are not an owner of any application'),
+      el('p', {}, 'This portal only shows app registrations where you are listed as an owner.'),
+      el('p', {}, 'If you should own an app, ask one of its current owners or your Entra ID administrator to add you as an owner, then refresh this page.'));
+    return;
+  }
+  if (!state.current) $('#emptyState').textContent = 'Select an application to manage it.';
+  if (!apps.length) {
+    list.replaceChildren(el('li', { class: 'muted pad' }, 'No applications match your filter.'));
     return;
   }
   list.replaceChildren(...apps.map((a) => el('li', {},
@@ -138,11 +150,11 @@ function renderAppList() {
     ))));
 }
 
-async function selectApp(id) {
+async function selectApp(id, reloadPermissions = false) {
   await busy(null, async () => {
     const switched = state.current?.id !== id;
     state.current = await api('GET', `/api/apps/${id}`);
-    if (switched) loadPermissions();
+    if (switched || reloadPermissions) loadPermissions();
     const i = state.apps.findIndex((a) => a.id === id);
     if (i >= 0) {
       const { secrets, certificates, signInEnabled, disabledByMicrosoft, deactivated, disabled } = state.current;
@@ -591,6 +603,25 @@ async function removeOwner(o, btn) {
   });
 }
 
+/** Refresh button: reload the app list, then the open app (details + API permissions). */
+async function refreshAll(btn) {
+  const id = state.current?.id;
+  await busy(btn, async () => {
+    state.apps = await api('GET', '/api/apps');
+    if (id && !state.apps.some((a) => a.id === id)) {
+      // Ownership was removed elsewhere (e.g. in the Entra portal) since the page loaded.
+      state.current = null;
+      $('#appDetail').classList.add('hidden');
+      $('#emptyState').classList.remove('hidden');
+      renderAppList();
+      toast('You are no longer an owner of this application', 'bad');
+      return;
+    }
+    renderAppList();
+    if (id) await selectApp(id, true);
+  });
+}
+
 // ---------- wiring ----------
 document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === t));
@@ -598,7 +629,7 @@ document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () 
 }));
 document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => b.closest('dialog').close()));
 $('#appFilter').addEventListener('input', renderAppList);
-$('#refreshBtn').addEventListener('click', () => state.current && selectApp(state.current.id));
+$('#refreshBtn').addEventListener('click', (e) => refreshAll(e.currentTarget));
 $('#disableAppBtn').addEventListener('click', (e) => state.current && disableApp(e.currentTarget));
 $('#newSecretBtn').addEventListener('click', openSecretDialog);
 $('#secretForm').addEventListener('submit', createSecret);

@@ -35,6 +35,7 @@ function securityLog(req, event, details = {}) {
     event,
     user: req?.session?.user?.username || null,
     userOid: req?.session?.user?.oid || null,
+    role: req?.session?.user?.role || null,
     ip: req?.ip || null,
     method: req?.method,
     path: req?.originalUrl?.split('?')[0],

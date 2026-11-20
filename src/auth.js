@@ -27,6 +27,32 @@ const cca = new msal.ConfidentialClientApplication({
 const crypto = new msal.CryptoProvider();
 const { securityLog, isSameOrigin } = require('./security');
 
+/**
+ * Portal roles come from the app roles assigned in Entra (Enterprise application →
+ * Users and groups) and arrive in the ID token's `roles` claim.
+ */
+const ROLE_SUPERADMIN = 'Application.SuperAdmin';
+const ROLE_MEMBERS = 'Application.Members';
+
+/**
+ * Entra directory roles (template ids, same in every tenant) that let a user change
+ * ANY app registration. Read from the `wids` claim (needs groupMembershipClaims to
+ * include "DirectoryRole"). Only used to warn SuperAdmins; Graph still enforces rights.
+ */
+const APP_ADMIN_ROLE_IDS = new Set([
+  '9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3', // Application Administrator
+  '158c047a-c907-4556-b7ef-446551a6b5f7', // Cloud Application Administrator
+  '62e90394-69f5-4237-9190-012177145e10', // Global Administrator
+]);
+
+/** 'superadmin', 'member', or null (no portal role assigned). SuperAdmin wins if both. */
+function portalRole(claims) {
+  const roles = Array.isArray(claims.roles) ? claims.roles : [];
+  if (roles.includes(ROLE_SUPERADMIN)) return 'superadmin';
+  if (roles.includes(ROLE_MEMBERS)) return 'member';
+  return null;
+}
+
 /** Sessions end after this long without activity (also the cookie lifetime). */
 const SESSION_IDLE_MS = 60 * 60 * 1000;
 /** ...and after this long in total, even when active. */
@@ -113,6 +139,20 @@ router.get('/callback', async (req, res, next) => {
       return res.status(403).type('text/plain').send('Guest accounts cannot use this portal. Sign in with your organisation account.');
     }
 
+    // Only users assigned Application.Members or Application.SuperAdmin in Entra may sign in.
+    const role = portalRole(claims);
+    if (!role) {
+      console.log(JSON.stringify({
+        ts: new Date().toISOString(), security: true, event: 'no_role_signin_blocked',
+        user: result.account.username, oid: claims.oid, ip: req.ip,
+      }));
+      if (result.account) await cca.getTokenCache().removeAccount(result.account).catch(() => {});
+      return res.status(403).type('text/plain').send(
+        'You have not been assigned a role for this portal (Application.Members or Application.SuperAdmin). '
+        + 'Ask your administrator to assign you, then sign in again.');
+    }
+    const wids = Array.isArray(claims.wids) ? claims.wids : [];
+
     // Prevent session fixation: issue a new session id after login.
     req.session.regenerate((err) => {
       if (err) return next(err);
@@ -122,6 +162,8 @@ router.get('/callback', async (req, res, next) => {
         oid: result.account.idTokenClaims?.oid,
         name: result.account.name,
         username: result.account.username,
+        role,
+        hasAppAdminRole: wids.some((w) => APP_ADMIN_ROLE_IDS.has(String(w).toLowerCase())),
         loginAt: now,
       };
       activity.set(result.account.homeAccountId, { lastSeen: now, loginAt: now });
@@ -154,6 +196,11 @@ router.post('/signout', async (req, res) => {
 function requireAuth(req, res, next) {
   const user = req.session?.user;
   if (!user) return res.status(401).json({ error: 'Not signed in' });
+  if (!user.role) {
+    // Session from before roles were introduced: sign in again to pick up the role.
+    dropAccount(user.homeAccountId);
+    return req.session.destroy(() => res.status(401).json({ error: 'Please sign in again' }));
+  }
   const now = Date.now();
   if (!user.loginAt || now - user.loginAt > SESSION_MAX_MS) {
     securityLog(req, 'session_max_lifetime_reached');

@@ -3,10 +3,22 @@
 ## [Unreleased]
 
 ### Added
-- **Disable app (one way):** owners can deactivate their app registration from its page (Graph beta `isDisabled = true`). The portal has no enable option; only an Entra administrator can reactivate the app. Logged as `app.disable`.
+- **Portal roles, managed in Entra** through two app roles on the portal's app registration:
+  - `Application.Members`: works as before; only apps they own.
+  - `Application.SuperAdmin`: sees **all** app registrations and can use every existing function on them. Guardrails still apply. SuperAdmins also need Application Administrator or Cloud Application Administrator in Entra; the portal shows a warning banner when it isn't active (read from the `wids` claim).
+  - The top bar shows the role; the sidebar reads "All applications" for SuperAdmins.
+- **Disable app:** owners can deactivate their app registration from its page (Graph beta `isDisabled = true`). Logged as `app.disable`.
+- **Enable app (SuperAdmins only):** re-activates a deactivated app (`POST /api/apps/:id/enable`). Members can't re-enable. Logged as `app.enable`.
+- **Clear message when a user owns no apps**, and "No applications match your filter" when the filter finds nothing.
+- **Refresh** now reloads the app list and the API permissions too, and closes the app if you're no longer its owner.
+
+### Changed
+- **Users without a portal role are refused at sign-in** (403, `no_role_signin_blocked`). Create the roles and assign users **before** upgrading ([Step 1b](README.md#roles)). Existing sessions are ended so everyone signs in again and picks up a role.
+- Audit and security log lines include `role`.
 
 ### Security
 - **Guest (B2B) accounts are blocked at sign-in** with a 403 and logged as `guest_signin_blocked`. For defence in depth, also set *Assignment required = Yes* on the enterprise app and assign only member users.
+- A Member calling the enable route is refused and logged as `enable_not_allowed`.
 
 ### Fixed
 - The yellow "expiring soon" dot in the app list was drawn as a large rounded square.

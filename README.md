@@ -29,6 +29,7 @@
 - [📋 Prerequisites](#prerequisites)
 - [🚀 Quick start](#quick-start)
 - [🔐 Step 1 · Register the portal in Entra ID](#register)
+- [👥 Step 1b · Roles: Members and SuperAdmins](#roles)
 - [⚙️ Step 2 · Configure `.env`](#configuration)
 - [▶️ Step 3 · Run](#run)
 - [📧 Step 4 · Expiry e-mails to owners *(optional)*](#notifications)
@@ -46,8 +47,8 @@
 
 App owners usually have to raise a ticket every time a client secret expires or a pipeline needs a new federated credential. This portal lets owners do it themselves, safely:
 
-- 🔑 Users sign in with **Entra ID SSO**.
-- 👀 They see **only the app registrations they own**.
+- 🔑 Users sign in with **Entra ID SSO**, and only if they've been given a portal role in Entra.
+- 👀 **Members** see **only the app registrations they own**. **SuperAdmins** see and manage **all** of them.
 - 🧱 Everything runs **as the signed-in user** (delegated Graph permissions), so Entra itself enforces who can change what.
 - 🧾 Every change is written to an **audit log**.
 
@@ -120,7 +121,7 @@ Search by name, UPN, email or object ID, then add or remove owners. **The last o
 <a id="screenshots"></a>
 ## 📸 Screenshots
 
-The left pane lists the apps you own, with a health dot (🟢 valid · 🟡 expiring · 🔴 expired) or ⛔ for a disabled app. The examples below show a **deactivated** app: it gets a red **Disabled** badge and a note explaining why, and can still be managed.
+The left pane lists the apps you own (SuperAdmins: all apps), with a health dot (🟢 valid · 🟡 expiring · 🔴 expired) or ⛔ for a disabled app. The examples below show a **deactivated** app: it gets a red **Disabled** badge and a note explaining why, and can still be managed.
 
 ### 🔑 Client secrets
 Create, rotate and delete secrets, with the expiry date and status of each.
@@ -152,16 +153,22 @@ flowchart LR
       direction TB
       A[🔐 MSAL<br/>auth code + PKCE]
       B{🚧 Guest check<br/>idp · home tenant · acct}
+      R{🎭 Role check<br/>roles claim}
       G[🧱 Ownership guard<br/>/me/ownedObjects]
+      ALL[🌐 All apps<br/>/applications]
       L[🧾 Audit log]
       N[📧 Expiry e-mails<br/>daily check]
       A --> B
-      B -- "member ✅" --> G
+      B -- "member ✅" --> R
+      R -- "Application.Members" --> G
+      R -- "Application.SuperAdmin" --> ALL
       G --> L
+      ALL --> L
     end
 
     GU([🧳 Guest user<br/>B2B / external]) -. "tries to sign in" .-> A
     B -- "guest ❌<br/>403, no session" --> D([🚫 Access denied<br/>security log])
+    R -- "no role ❌<br/>403, no session" --> D
 
     S -- "OIDC sign-in" --> E[(Microsoft<br/>Entra ID)]
     S -- "delegated token<br/>as the signed-in user" --> M[(Microsoft<br/>Graph v1.0)]
@@ -171,9 +178,9 @@ flowchart LR
 
 | Layer | What protects you |
 |---|---|
-| **Entra ID** | Delegated permissions mean Graph applies the *user's* own rights, so a normal user can only change apps they own |
-| **Sign-in** | **Guest (B2B) accounts are refused**: no session is created, their tokens are discarded and the attempt is logged as `guest_signin_blocked`. Only members of your tenant get in. |
-| **Portal** | Before every action, the server re-checks that the app is in `/me/ownedObjects`. Even admins only see their **own** apps here. |
+| **Entra ID** | Delegated permissions mean Graph applies the *user's* own rights, so a normal user can only change apps they own, and a SuperAdmin needs a real Entra admin role to change other apps |
+| **Sign-in** | **Guest (B2B) accounts are refused** (`guest_signin_blocked`). Then the user needs the **`Application.Members`** or **`Application.SuperAdmin`** app role, or they're refused too (`no_role_signin_blocked`). In both cases no session is created and their tokens are discarded. |
+| **Portal** | **Members:** before every action, the server re-checks that the app is in `/me/ownedObjects`, so even Entra admins with only the Members role see just their **own** apps. **SuperAdmins:** any app in the tenant. |
 | **Browser** | Never sees a token. It only holds an HttpOnly, SameSite session cookie. |
 
 **What `/auth/callback` returns after sign-in.** To check it:
@@ -185,8 +192,12 @@ flowchart LR
 
 | Who signs in | Status code | Meaning |
 |---|---|---|
-| 👤 **Tenant user** (member) | `302 Found` | Sign-in succeeded. The portal created the session and sent the browser on to the portal home page. |
+| 👤 **Tenant user** with a portal role | `302 Found` | Sign-in succeeded. The portal created the session and sent the browser on to the portal home page. |
+| 👤 **Tenant user** with **no** portal role | `403 Forbidden` | The role check stopped them. No session was created and their tokens were discarded. The server logs `"event":"no_role_signin_blocked"`. |
 | 🧳 **Guest user** (B2B) | `403 Forbidden` | The guest check stopped them. No session was created and their tokens were discarded. The server logs `"event":"guest_signin_blocked"`. |
+
+> [!NOTE]
+> With **Assignment required = Yes**, a user without a role never reaches `/auth/callback`: Entra stops them first with `AADSTS50105`.
 
 ---
 
@@ -251,7 +262,7 @@ npm start                       # 👉 http://localhost:3000
    | `DelegatedPermissionGrant.Read.All` *(optional)* | Shows consent status for delegated permissions; without it, that status is "Unknown" |
 
 5. Click **✅ Grant admin consent for &lt;tenant&gt;**.
-6. *(Recommended)* **Enterprise applications → Entra App Self-Service → Properties → Assignment required = Yes**, then assign who may use the portal.
+6. Create the two **app roles** and assign users: see [Step 1b · Roles](#roles). **Without a role, nobody can sign in.**
 
 </details>
 
@@ -277,9 +288,68 @@ az ad app permission admin-consent --id $APP_ID
 az ad app credential reset --id $APP_ID --display-name portal --years 1 --query password -o tsv  # → CLIENT_SECRET
 echo "CLIENT_ID=$APP_ID"
 az account show --query tenantId -o tsv                                                          # → TENANT_ID
+
+# Portal roles (Step 1b) and the wids claim
+cat > roles.json <<EOF
+[
+  {"allowedMemberTypes":["User"],"displayName":"Application Members","value":"Application.Members","isEnabled":true,
+   "id":"$(uuidgen)","description":"Can manage the app registrations they own in the self-service portal."},
+  {"allowedMemberTypes":["User"],"displayName":"Application SuperAdmin","value":"Application.SuperAdmin","isEnabled":true,
+   "id":"$(uuidgen)","description":"Can manage all app registrations in the self-service portal."}
+]
+EOF
+az ad app update --id $APP_ID --app-roles @roles.json --set groupMembershipClaims=DirectoryRole
 ```
 
+Then assign users to the roles in the admin center ([Step 1b](#roles), step 3).
+
 </details>
+
+---
+
+<a id="roles"></a>
+## 👥 Step 1b · Roles: Members and SuperAdmins
+
+Who may use the portal, and what they may do, is managed **only in Entra** through two **app roles**. The portal reads them from the sign-in token (`roles` claim); it has no user list of its own.
+
+| Action | `Application.Members` | `Application.SuperAdmin` |
+|---|---|---|
+| Apps shown | Apps they **own** | **All** apps in the tenant |
+| Client secrets, certificates, federated credentials, API permissions, owners | ✅ own apps | ✅ all apps |
+| Disable app | ✅ own apps | ✅ all apps |
+| **Enable app** (re-activate a deactivated app) | ❌ | ✅ all apps |
+| Guardrails (privileged apps, guest owners, secret lifetime, last owner) | apply | **apply too** |
+
+A user with **neither** role is refused at sign-in (`403`, `no_role_signin_blocked`). A user with both is a SuperAdmin.
+
+> [!IMPORTANT]
+> The portal runs **as the signed-in user**, so the app role alone doesn't let a SuperAdmin change apps they don't own: Graph would refuse with `403`. Each SuperAdmin also needs the Entra directory role **Application Administrator** or **Cloud Application Administrator** (ideally *eligible* through PIM). If it isn't active when they sign in, the portal shows a warning banner.
+
+**1. Create the app roles.** *App registrations → Entra App Self-Service → App roles → + Create app role*, twice:
+
+| Display name | Allowed member types | Value | Description |
+|---|---|---|---|
+| `Application Members` | **Users/Groups** | `Application.Members` | Can manage the app registrations they own in the self-service portal. |
+| `Application SuperAdmin` | **Users/Groups** | `Application.SuperAdmin` | Can manage all app registrations in the self-service portal. |
+
+Keep **Do you want to enable this app role?** ticked. The **Value** must match exactly (case and dot).
+
+**2. Turn on the `wids` claim** (lets the portal see the user's active Entra admin roles). *App registrations → Entra App Self-Service → Token configuration → + Add groups claim* → tick **only** **Directory roles** → **Add**. The manifest now has `"groupMembershipClaims": "DirectoryRole"`.
+
+**3. Assign users.** *Enterprise applications → Entra App Self-Service → Users and groups → + Add user/group* → pick users → **Select a role** → **Assign**.
+- Assigning **groups** needs Entra ID P1/P2, and only **direct** members count (no nested groups). Without P1, assign users directly.
+- Give **SuperAdmins** Application Administrator or Cloud Application Administrator (*Roles and administrators*, or PIM).
+- **Members** also need to be **owners** of their apps (App registration → Owners, or the portal's Owners tab).
+
+**4. Require assignment.** *Enterprise applications → Entra App Self-Service → Properties → Assignment required = Yes*. Users without a role are then stopped by Entra (`AADSTS50105`) before they reach the portal.
+
+| Person | Needs |
+|---|---|
+| Member | `Application.Members` role **+** ownership of their apps |
+| SuperAdmin | `Application.SuperAdmin` role **+** Application Administrator or Cloud Application Administrator |
+
+> [!NOTE]
+> Roles are read at sign-in. After assigning or removing a role (or activating one in PIM), the user must **sign out and sign in again**. Sessions from before this version are ended automatically so everyone picks up a role.
 
 ---
 
@@ -344,7 +414,7 @@ Open **http://localhost:3000** → **Sign in with Microsoft** 🎉
 
 <br/>
 
-- **An app to manage:** create a throwaway app registration and add yourself under **Owners**. Only apps you own appear in the portal.
+- **An app to manage:** create a throwaway app registration and add yourself under **Owners**. Only apps you own appear in the portal (unless you're a SuperAdmin). You also need a portal role: see [Step 1b](#roles).
 - **A test certificate** (upload only the public part):
 
   ```powershell
@@ -481,7 +551,7 @@ After each daily check it prints a summary line, and every e-mail sent is writte
 <a id="using"></a>
 ## 📖 Using the portal
 
-The left pane lists your apps, with a health dot: 🟢 all credentials valid · 🟡 something expires within 30 days · 🔴 something has expired.
+The top bar shows your role (**Member** or **SuperAdmin**). The left pane lists your apps (**My applications**) or, for SuperAdmins, every app in the tenant (**All applications**), with a health dot: 🟢 all credentials valid · 🟡 something expires within 30 days · 🔴 something has expired.
 
 ⛔ marks a **disabled** app. That means one of:
 
@@ -491,7 +561,9 @@ The left pane lists your apps, with a health dot: 🟢 all credentials valid · 
 
 A disabled app can't get new tokens, but you can still manage its credentials and owners here.
 
-**Disable app (one way).** On an app's page, **Disable app** deactivates the app registration (Graph beta `isDisabled = true`) after a confirmation. It's meant for apps that are no longer needed or may be compromised. **The portal has no Enable option:** to bring the app back, ask an Entra administrator to select **Activate** on the app registration in the Entra admin center. Each disable is written to the audit log as `app.disable`.
+**Disable app.** On an app's page, **Disable app** deactivates the app registration (Graph beta `isDisabled = true`) after a confirmation. It's meant for apps that are no longer needed or may be compromised. Each disable is written to the audit log as `app.disable`.
+
+**Enable app (SuperAdmins only).** On a deactivated app, SuperAdmins see **Enable app**, which re-activates it (`isDisabled = false`), audited as `app.enable`. It doesn't change the enterprise app's *Enabled for users to sign-in?* setting, and it isn't offered for apps disabled by Microsoft. **Members can't re-enable an app:** ask a SuperAdmin, or an Entra administrator (**Activate** on the app registration).
 
 <details>
 <summary><b>🔑 Client secrets</b></summary>
@@ -559,7 +631,7 @@ A disabled app can't get new tokens, but you can still manage its credentials an
 <br/>
 
 - **+ Add owner:** type at least 2 characters of a name, UPN or email, or paste a full UPN or object ID, then click the user.
-- **Remove:** the last owner can't be removed. Removing **yourself** asks for confirmation, because you immediately lose access to the app.
+- **Remove:** the last owner can't be removed. Removing **yourself** asks for confirmation, because a Member immediately loses access to the app (a SuperAdmin keeps it).
 - 🔒 Only **users** can be added; guests (`#EXT#`) are blocked unless `ALLOW_GUEST_OWNERS=true`.
 
 </details>
@@ -600,6 +672,11 @@ The **API permissions** tab and the **Add a permission** dialog also mark high-r
 | 🔍 "Search failed: …" when adding an owner | Check that `User.ReadBasic.All` is consented, and look for `[4xx]` lines in the server terminal. |
 | ⚪ Permission status "Unknown" | Add `DelegatedPermissionGrant.Read.All` (Delegated) and grant consent. |
 | 🚫 "You are not an owner of this application" | Ask a current owner to add you. |
+| 🎭 "You have not been assigned a role for this portal" (`403`) | Assign the user `Application.Members` or `Application.SuperAdmin` ([Step 1b](#roles)), then have them **sign out and in again**. Check that the role **Value** is spelled exactly. |
+| 🎭 `AADSTS50105` … not assigned to a role for the application | *Assignment required* is on and the user has no role. Assign one ([Step 1b](#roles)). |
+| 🎭 SuperAdmin sees only their own apps / badge says **Member** | They signed in before getting the role, or also lack it. Sign out and in again; paste the ID token into [jwt.ms](https://jwt.ms) and look for `"roles":["Application.SuperAdmin"]`. |
+| ⚠️ SuperAdmin warning banner about Application Administrator | Their Entra role isn't **active** (PIM eligible only) or the `wids` claim isn't on. Activate it in PIM and sign in again; check *Token configuration* has **Directory roles** ([Step 1b](#roles), step 2). |
+| 🚫 SuperAdmin gets `Insufficient privileges` on an app they don't own | Graph refused: they need an **active** Application Administrator or Cloud Application Administrator role. |
 | ⏱️ "Session expired" | The 1-hour idle timeout or the `SESSION_MAX_HOURS` limit (default 8 hours) was reached, or the server restarted (sessions are in memory). Sign in again. |
 | ⛔ "This app holds high-risk permissions … blocked" | The app has a high-risk permission granted. Ask an Entra administrator, or set `PRIVILEGED_APPS=warn` if your policy allows owners to manage such apps. |
 | 🔗 "This issuer is not allowed" | Add the issuer to `FEDERATED_ALLOWED_ISSUERS` (comma separated, `*` wildcards allowed) and restart. |
@@ -631,8 +708,8 @@ These are settings in Azure and Entra; none of them need code changes.
 | 2 | **FTP** = Disabled, **SCM / FTP basic auth publishing** = Off, **Remote debugging** = Off | App Service → Configuration → General settings |
 | 3 | **Secrets in Key Vault:** store `CLIENT_SECRET` and `SESSION_SECRET` in Key Vault and reference them as `@Microsoft.KeyVault(SecretUri=…)` with a **managed identity**. Better still, replace `CLIENT_SECRET` with a certificate or a managed identity federated credential. | Key Vault + App Service → Identity |
 | 4 | **Access restrictions** on the app **and** the SCM (Kudu) site; ideally put **Front Door / Application Gateway with WAF** in front | App Service → Networking |
-| 5 | **Assignment required** = Yes on the portal's enterprise app; assign only the people who need it | Entra → Enterprise applications → Properties |
-| 6 | **Conditional Access** for the portal: require MFA (and a compliant device), and **block privileged admin roles** (e.g. Global / Application / Cloud Application Administrator) from using it | Entra → Conditional Access |
+| 5 | **Assignment required** = Yes on the portal's enterprise app; assign only the people who need it a [role](#roles) | Entra → Enterprise applications → Properties |
+| 6 | **Conditional Access** for the portal: require MFA (and a compliant device) for everyone, and **phishing-resistant MFA** for SuperAdmins (they hold Application Administrator rights) | Entra → Conditional Access |
 | 7 | **Diagnostic settings** sending App Service console logs to Log Analytics / Sentinel; alert on `"security":true` events | App Service → Diagnostic settings |
 | 8 | **Microsoft Defender for App Service** = On | Defender for Cloud |
 | 9 | Mark `NOTIFY_*` as **deployment slot settings**, and keep `NOTIFY_ENABLED=false` in staging slots | App Service → Configuration |
@@ -650,10 +727,10 @@ These are settings in Azure and Entra; none of them need code changes.
 
 | Control | Implementation |
 |---|---|
-| 🔐 **Authentication** | Entra OIDC auth-code flow with PKCE and `state` check; session ID regenerated after login. **Guest (B2B) accounts are refused** at sign-in (403, logged as `guest_signin_blocked`); also set *Assignment required = Yes* on the enterprise app and assign only member users |
+| 🔐 **Authentication** | Entra OIDC auth-code flow with PKCE and `state` check; session ID regenerated after login. **Guest (B2B) accounts are refused** at sign-in (403, `guest_signin_blocked`), and so are users without an `Application.Members` / `Application.SuperAdmin` app role (403, `no_role_signin_blocked`); also set *Assignment required = Yes* on the enterprise app |
 | ⏱️ **Sessions** | HttpOnly, SameSite=Lax cookie (`Secure` on HTTPS); 1-hour idle timeout **and** an absolute limit (`SESSION_MAX_HOURS`, default 8 hours); expired sessions are purged from memory |
 | 🎟️ **Tokens** | Kept server-side in the MSAL cache, never sent to the browser. A user's tokens, including refresh tokens, are **removed from memory** when they sign out, after 1 hour idle, or at the absolute limit. |
-| 🧱 **Authorization** | Delegated Graph permissions **plus** a server-side `/me/ownedObjects` check on every action |
+| 🧱 **Authorization** | Delegated Graph permissions **plus**, for Members, a server-side `/me/ownedObjects` check on every action. SuperAdmins skip the ownership check but still need a real Entra admin role for Graph to allow changes. Only SuperAdmins can re-enable apps. |
 | ⚠️ **Privileged apps** | New credentials and owners are **blocked** on apps granted high-risk permissions (`PRIVILEGED_APPS=block`), so an owner can't use the portal to take over a powerful app. See [Apps with high-risk permissions](#-using-the-portal). |
 | 🛑 **CSRF** | Writes require `X-Requested-With: fetch` and a same-origin `Origin` (malformed or `null` origins are rejected). Sign-out is a same-origin POST. |
 | 🚦 **Rate limits** | Per user: 600 API requests per 5 minutes and 30 changes per minute. Per IP: 60 sign-in requests per 5 minutes. |
@@ -676,10 +753,12 @@ These are settings in Azure and Entra; none of them need code changes.
 Every change writes one JSON line to stdout:
 
 ```json
-{"ts":"2026-11-13T10:15:02.123Z","audit":true,"user":"jane@contoso.com","userOid":"…","action":"secret.add","appId":"…","appName":"Payroll API","keyId":"…","months":6,"replaced":null}
+{"ts":"2026-11-13T10:15:02.123Z","audit":true,"user":"jane@contoso.com","userOid":"…","role":"member","action":"secret.add","appId":"…","appName":"Payroll API","keyId":"…","months":6,"replaced":null}
 ```
 
-**Actions:** `secret.add` · `secret.remove` · `certificate.add` · `certificate.remove` · `federated.add` · `federated.update` · `federated.remove` · `permission.add` · `permission.remove` · `owner.add` · `owner.remove` · `notify.sent` (user `system`)
+`role` is `member` or `superadmin`. Filter on `role == "superadmin"` to review changes SuperAdmins made to apps they may not own.
+
+**Actions:** `secret.add` · `secret.remove` · `certificate.add` · `certificate.remove` · `federated.add` · `federated.update` · `federated.remove` · `permission.add` · `permission.remove` · `owner.add` · `owner.remove` · `app.disable` · `app.enable` · `notify.sent` (user `system`)
 
 </details>
 
@@ -696,7 +775,10 @@ Every denied or suspicious request writes one JSON line to stderr, with `"securi
 
 | Event | Meaning |
 |---|---|
-| `not_owner` | Tried to open or change an app the user doesn't own |
+| `not_owner` | A Member tried to open or change an app they don't own |
+| `no_role_signin_blocked` | Sign-in refused: no `Application.Members` / `Application.SuperAdmin` role |
+| `guest_signin_blocked` | Sign-in refused: guest (B2B) account |
+| `enable_not_allowed` | A Member tried to re-enable an app (SuperAdmins only) |
 | `csrf_header_missing` · `bad_origin` · `signout_bad_origin` | Request didn't come from the portal's own page; possible CSRF |
 | `rate_limited` | A user or IP hit a rate limit |
 | `privileged_app_change_blocked` · `privileged_app_change_allowed` | Credential or owner change on a privileged app (blocked, or allowed in `warn` mode) |
@@ -720,16 +802,17 @@ Every denied or suspicious request writes one JSON line to stderr, with `"securi
 
 <br/>
 
-All routes need a signed-in session. Routes under `/api/apps/:id` also require the caller to **own** the app. Write requests need the header `X-Requested-With: fetch`.
+All routes need a signed-in session with a portal role. Routes under `/api/apps/:id` also require a **Member** to **own** the app (SuperAdmins: any app). Write requests need the header `X-Requested-With: fetch`.
 
 | Method | Route | Purpose |
 |---|---|---|
 | `GET` | `/auth/signin` · `/auth/callback` | Sign in |
 | `POST` | `/auth/signout` | Sign out (same-origin only) |
-| `GET` | `/api/me` | Current user |
-| `GET` | `/api/apps` | Apps the user owns |
+| `GET` | `/api/me` | Current user, `role` (`member` / `superadmin`) and `hasAppAdminRole` |
+| `GET` | `/api/apps` | Apps the user owns (SuperAdmins: all apps) |
 | `GET` | `/api/apps/:id` | App details, owners and federated credentials |
-| `POST` | `/api/apps/:id/disable` | Deactivate the app `{reason?}`. One way: there is no enable route |
+| `POST` | `/api/apps/:id/disable` | Deactivate the app `{reason?}` |
+| `POST` | `/api/apps/:id/enable` | Re-activate a deactivated app `{reason?}`. **SuperAdmins only** |
 | `POST` | `/api/apps/:id/secrets` | Add a secret `{displayName, months, replaceKeyId?}` |
 | `DELETE` | `/api/apps/:id/secrets/:keyId` | Delete a secret |
 | `POST` | `/api/apps/:id/certificates` | Upload a certificate `{content (base64), displayName?}` |

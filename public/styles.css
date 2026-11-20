@@ -86,6 +86,9 @@ input:focus, select:focus, .btn:focus-visible, .app-item:focus-visible { outline
 /* detail */
 .detail { padding: 24px 28px; overflow-y: auto; min-width: 0; }
 .empty { color: var(--muted); padding: 60px 0; text-align: center; }
+.empty h3 { color: var(--text); margin: 8px 0 12px; }
+.empty p { max-width: 460px; margin: 6px auto; line-height: 1.5; }
+.empty-icon { font-size: 40px; }
 .detail-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 18px; }
 .detail-head h1 { font-size: 22px; word-break: break-word; }
 .head-actions { display: flex; gap: 8px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
@@ -107,6 +110,9 @@ input:focus, select:focus, .btn:focus-visible, .app-item:focus-visible { outline
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
 .badge.bad { background: var(--bad-bg); color: var(--bad); }
 .badge.you { background: var(--active); color: var(--primary); margin-left: 8px; }
+.badge.role { background: var(--active); color: var(--primary); }
+.badge.role.super { background: var(--warn-bg); color: var(--warn); }
+.role-banner { margin: 0; border-radius: 0; text-align: center; }
 
 .upload { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; align-items: center; }
 .upload input[type=text] { flex: 1 1 200px; width: auto; }

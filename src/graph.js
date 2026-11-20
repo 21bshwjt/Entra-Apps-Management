@@ -54,7 +54,10 @@ module.exports = {
   listOwnedApps: (t) =>
     getAll(t, `/me/ownedObjects/microsoft.graph.application?$select=${APP_FIELDS}&$top=999`),
 
-  /** Every app registration in the tenant (needs an app-only token with Application.Read.All). */
+  /**
+   * Every app registration in the tenant. Used with an app-only token by the expiry e-mails,
+   * and with the user's delegated token for SuperAdmins.
+   */
   listAllApps: (t) => getAll(t, `/applications?$select=${APP_FIELDS}&$top=999`),
 
   /** True when the app registration is deactivated (`isDisabled` is only on the Graph beta endpoint). */
@@ -62,12 +65,13 @@ module.exports = {
     (await call(t, 'GET', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}?$select=id,isDisabled`))
       .isDisabled === true,
 
-  /**
-   * Deactivate an app registration (Entra "State: Deactivated"; `isDisabled` is beta-only).
-   * There is deliberately NO matching "activate" helper: the portal can disable apps but never re-enable them.
-   */
+  /** Deactivate an app registration (Entra "State: Deactivated"; `isDisabled` is beta-only). */
   deactivateApp: (t, id) =>
     call(t, 'PATCH', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}`, { isDisabled: true }),
+
+  /** Re-activate a deactivated app registration. The API only offers this to SuperAdmins. */
+  activateApp: (t, id) =>
+    call(t, 'PATCH', `https://graph.microsoft.com/beta/applications/${encodeURIComponent(id)}`, { isDisabled: false }),
 
   /** Owners that are users (service principals that own the app are left out). */
   listUserOwners: (t, id) =>
@@ -154,6 +158,21 @@ module.exports = {
     const apps = await getAll(t,
       'https://graph.microsoft.com/beta/me/ownedObjects/microsoft.graph.application?$select=id,isDisabled&$top=999');
     return new Set(apps.filter((a) => a.isDisabled === true).map((a) => a.id));
+  },
+
+  /** Same as getDeactivatedAppIds, but for every app registration in the tenant (SuperAdmins). */
+  getAllDeactivatedAppIds: async (t) => {
+    const apps = await getAll(t, 'https://graph.microsoft.com/beta/applications?$select=id,isDisabled&$top=999');
+    return new Set(apps.filter((a) => a.isDisabled === true).map((a) => a.id));
+  },
+
+  /**
+   * appId -> accountEnabled for every service principal in the tenant, in one paged call.
+   * Used for the SuperAdmin list, where looking up each app on its own would be too slow.
+   */
+  getAllSpEnabledMap: async (t) => {
+    const sps = await getAll(t, '/servicePrincipals?$select=appId,accountEnabled&$top=999');
+    return new Map(sps.map((sp) => [sp.appId, sp.accountEnabled]));
   },
 
   getSpEnabledMap: async (t, appIds) => {

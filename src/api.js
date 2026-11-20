@@ -44,12 +44,16 @@ router.use((req, res, next) => {
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+/** Application.SuperAdmin: may use every portal function on every app registration in the tenant. */
+const isSuperAdmin = (req) => req.session.user.role === 'superadmin';
+
 function audit(req, action, details) {
   console.log(JSON.stringify({
     ts: new Date().toISOString(),
     audit: true,
     user: req.session.user.username,
     userOid: req.session.user.oid,
+    role: req.session.user.role,
     action,
     ...details,
   }));
@@ -60,14 +64,26 @@ function bad(res, msg) {
 }
 
 /**
- * Ownership guard: the app must be in the caller's /me/ownedObjects.
- * Graph would also block non-owners, but this stops admins from using the
- * portal to change apps they don't personally own.
+ * Access guard for /apps/:id routes.
+ * - Members: the app must be in the caller's /me/ownedObjects. Graph would also block
+ *   non-owners, but this stops Entra admins with only the Members role from using the
+ *   portal to change apps they don't personally own.
+ * - SuperAdmins: any app registration in the tenant. Graph still enforces their Entra
+ *   rights (Application Administrator / Cloud Application Administrator).
  */
 const requireOwnership = wrap(async (req, res, next) => {
   const { id } = req.params;
   if (!GUID.test(id)) return bad(res, 'Invalid application id');
   req.token = await getGraphToken(req);
+  if (isSuperAdmin(req)) {
+    try {
+      req.app_ = await graph.getApp(req.token, id);
+    } catch (e) {
+      if (e.status === 404) return res.status(404).json({ error: 'Application not found' });
+      throw e;
+    }
+    return next();
+  }
   const owned = await graph.listOwnedApps(req.token);
   const app = owned.find((a) => a.id === id);
   if (!app) {
@@ -130,18 +146,19 @@ const guardPrivileged = (action) => wrap(async (req, res, next) => {
 
 // --- Who am I ---------------------------------------------------------------
 router.get('/me', (req, res) => {
-  const { name, username, oid } = req.session.user;
-  res.json({ name, username, oid, maxSecretMonths: MAX_SECRET_MONTHS });
+  const { name, username, oid, role, hasAppAdminRole } = req.session.user;
+  res.json({ name, username, oid, role, hasAppAdminRole: !!hasAppAdminRole, maxSecretMonths: MAX_SECRET_MONTHS });
 });
 
 // --- Apps -------------------------------------------------------------------
 router.get('/apps', wrap(async (req, res) => {
   const token = await getGraphToken(req);
-  const apps = await graph.listOwnedApps(token);
+  const all = isSuperAdmin(req);
+  const apps = all ? await graph.listAllApps(token) : await graph.listOwnedApps(token);
   apps.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
   const [spEnabled, deactivated] = await Promise.all([
-    spEnabledMap(token, apps.map((a) => a.appId)),
-    deactivatedIds(token),
+    all ? allSpEnabledMap(token) : spEnabledMap(token, apps.map((a) => a.appId)),
+    deactivatedIds(token, all),
   ]);
   res.json(apps.map((a) => shapeApp(a, spEnabled, deactivated)));
 }));
@@ -152,7 +169,9 @@ router.get('/apps/:id', requireOwnership, wrap(async (req, res) => {
     graph.listOwners(req.token, req.params.id),
     graph.listFederated(req.token, req.params.id),
     spEnabledMap(req.token, [req.app_.appId]),
-    deactivatedIds(req.token),
+    graph.isAppDeactivated(req.token, req.params.id)
+      .then((d) => new Set(d ? [req.params.id] : []))
+      .catch(() => null),
     appPrivilege(req.token, req.app_).catch(() => null),
   ]);
   res.json({
@@ -164,10 +183,10 @@ router.get('/apps/:id', requireOwnership, wrap(async (req, res) => {
   });
 }));
 
-// --- Disable (one way) ----------------------------------------------------------
+// --- Disable / Enable -------------------------------------------------------------
 /**
- * Owners can deactivate their app. There is intentionally no "enable" route:
- * re-activation must be done by an Entra administrator.
+ * Members and SuperAdmins can deactivate an app. Only SuperAdmins can re-enable one;
+ * for Members, re-activation stays with an Entra administrator.
  */
 router.post('/apps/:id/disable', requireOwnership, wrap(async (req, res) => {
   if (await graph.isAppDeactivated(req.token, req.params.id).catch(() => false)) {
@@ -179,12 +198,45 @@ router.post('/apps/:id/disable', requireOwnership, wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/** Best effort (beta endpoint): if it fails, no app is reported as deactivated. */
-async function deactivatedIds(token) {
+/**
+ * SuperAdmins only. Reverses the portal's Disable (app registration "Deactivated" state).
+ * It does not touch the enterprise app's "Enabled for users to sign-in" setting, and it
+ * cannot undo a Microsoft-imposed disable.
+ */
+router.post('/apps/:id/enable', (req, res, next) => {
+  if (isSuperAdmin(req)) return next();
+  securityLog(req, 'enable_not_allowed', { applicationObjectId: req.params.id });
+  return res.status(403).json({ error: 'Only SuperAdmins can re-enable an application' });
+}, requireOwnership, wrap(async (req, res) => {
+  const ms = req.app_.disabledByMicrosoftStatus;
+  if (ms && ms !== 'NotDisabled') {
+    return res.status(409).json({ error: `This app was disabled by Microsoft (${ms}) and cannot be re-enabled here.` });
+  }
+  if (!(await graph.isAppDeactivated(req.token, req.params.id))) {
+    return res.json({ ok: true, alreadyEnabled: true });
+  }
+  const reason = String(req.body?.reason || '').trim().slice(0, 200) || null;
+  await graph.activateApp(req.token, req.params.id);
+  audit(req, 'app.enable', { appId: req.app_.appId, appName: req.app_.displayName, reason });
+  res.json({ ok: true });
+}));
+
+/** Best effort (beta endpoint): if it fails, deactivation state is reported as unknown. */
+async function deactivatedIds(token, allApps) {
   try {
-    return await graph.getDeactivatedAppIds(token);
+    return await (allApps ? graph.getAllDeactivatedAppIds(token) : graph.getDeactivatedAppIds(token));
   } catch (e) {
     console.warn(`Could not read app deactivation state: [${e.status}] ${e.message}`);
+    return null;
+  }
+}
+
+/** Best effort: sign-in state of every service principal (SuperAdmin list). */
+async function allSpEnabledMap(token) {
+  try {
+    return await graph.getAllSpEnabledMap(token);
+  } catch (e) {
+    console.warn(`Could not read service principal status: ${e.message}`);
     return null;
   }
 }

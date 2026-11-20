@@ -3,6 +3,8 @@
 const $ = (s) => document.querySelector(s);
 const state = { me: null, apps: [], current: null };
 const EXPIRING_DAYS = 30;
+/** Application.SuperAdmin: sees and manages every app registration in the tenant. */
+const isSuper = () => state.me?.role === 'superadmin';
 
 // ---------- API ----------
 async function api(method, url, body) {
@@ -96,6 +98,13 @@ async function init() {
     return showSignedOut();
   }
   $('#userName').textContent = state.me.name || state.me.username;
+  const rb = $('#roleBadge');
+  rb.textContent = isSuper() ? 'SuperAdmin' : 'Member';
+  rb.classList.toggle('super', isSuper());
+  rb.classList.remove('hidden');
+  $('#listTitle').textContent = isSuper() ? 'All applications' : 'My applications';
+  $('#appList').setAttribute('aria-label', isSuper() ? 'All applications in the tenant' : 'Applications you own');
+  $('#adminRoleBanner').classList.toggle('hidden', !isSuper() || state.me.hasAppAdminRole);
   $('#userBox').classList.remove('hidden');
   $('#signedIn').classList.remove('hidden');
 
@@ -121,6 +130,11 @@ function renderAppList() {
   const list = $('#appList');
   const none = !state.apps.length;
   $('#appFilter').classList.toggle('hidden', none);
+  if (none && isSuper()) {
+    list.replaceChildren(el('li', { class: 'muted pad' }, 'No app registrations found in this tenant.'));
+    $('#emptyState').textContent = 'There are no app registrations in this tenant.';
+    return;
+  }
   if (none) {
     list.replaceChildren(el('li', { class: 'muted pad' }, 'You do not own any app registrations.'));
     $('#emptyState').replaceChildren(
@@ -185,8 +199,10 @@ function renderDetail() {
   $('#dPrivNote').classList.toggle('hidden', !privileged);
   $('#dAppId').textContent = a.appId;
   $('#dObjId').textContent = a.id;
-  // One-way: shown only while the app is not deactivated; there is no "enable" button.
+  // Disable: everyone, while the app is active. Enable: SuperAdmins only, for deactivated apps
+  // (not for apps disabled by Microsoft, which can't be re-enabled here).
   $('#disableAppBtn').classList.toggle('hidden', a.deactivated === true);
+  $('#enableAppBtn').classList.toggle('hidden', !(isSuper() && a.deactivated === true && !a.disabledByMicrosoft));
 
   // secrets
   const sRows = a.secrets
@@ -277,16 +293,33 @@ async function deleteSecret(s, btn) {
   });
 }
 
-// ---------- disable app (one way) ----------
+// ---------- disable / enable app ----------
 async function disableApp(btn) {
   const a = state.current;
   if (!(await confirmAction('Disable this app?',
     `"${a.displayName}" will be deactivated. No new tokens can be issued, so anything that signs in as this app will stop working `
-    + 'once its current tokens expire. You CANNOT re-enable it from this portal; only an Entra administrator can.',
+    + 'once its current tokens expire. '
+    + (isSuper()
+      ? 'As a SuperAdmin you can re-enable it here later.'
+      : 'You CANNOT re-enable it from this portal; only a SuperAdmin or an Entra administrator can.'),
     'Disable app'))) return;
   await busy(btn, async () => {
     const r = await api('POST', `/api/apps/${a.id}/disable`, {});
     toast(r.alreadyDisabled ? 'App was already disabled' : 'App disabled');
+    await selectApp(a.id);
+  });
+}
+
+/** SuperAdmins only (the server refuses everyone else). */
+async function enableApp(btn) {
+  const a = state.current;
+  if (!(await confirmAction('Enable this app?',
+    `"${a.displayName}" will be re-activated and can get tokens again. `
+    + 'If sign-in is also turned off on its enterprise application, that setting is not changed.',
+    'Enable app'))) return;
+  await busy(btn, async () => {
+    const r = await api('POST', `/api/apps/${a.id}/enable`, {});
+    toast(r.alreadyEnabled ? 'App was already enabled' : 'App enabled');
     await selectApp(a.id);
   });
 }
@@ -585,14 +618,16 @@ async function addOwner(u, btn) {
 
 async function removeOwner(o, btn) {
   const self = o.id === state.me.oid;
-  const msg = self
-    ? 'You are removing YOURSELF. You will immediately lose access to manage this application.'
-    : `${o.displayName} will no longer be able to manage this application.`;
+  const msg = self && isSuper()
+    ? 'You are removing YOURSELF as an owner. As a SuperAdmin you can still manage this application here.'
+    : self
+      ? 'You are removing YOURSELF. You will immediately lose access to manage this application.'
+      : `${o.displayName} will no longer be able to manage this application.`;
   if (!(await confirmAction('Remove owner?', msg, 'Remove'))) return;
   await busy(btn, async () => {
     await api('DELETE', `/api/apps/${state.current.id}/owners/${o.id}`);
     toast('Owner removed');
-    if (self) {
+    if (self && !isSuper()) {
       state.current = null;
       $('#appDetail').classList.add('hidden');
       $('#emptyState').classList.remove('hidden');
@@ -631,6 +666,7 @@ document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('cli
 $('#appFilter').addEventListener('input', renderAppList);
 $('#refreshBtn').addEventListener('click', (e) => refreshAll(e.currentTarget));
 $('#disableAppBtn').addEventListener('click', (e) => state.current && disableApp(e.currentTarget));
+$('#enableAppBtn').addEventListener('click', (e) => state.current && enableApp(e.currentTarget));
 $('#newSecretBtn').addEventListener('click', openSecretDialog);
 $('#secretForm').addEventListener('submit', createSecret);
 $('#certForm').addEventListener('submit', uploadCert);

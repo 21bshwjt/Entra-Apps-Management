@@ -14,6 +14,7 @@
     </div>
     <div id="userBox" class="user hidden">
       <span id="userName"></span>
+      <span id="roleBadge" class="badge role hidden"></span>
       <form class="inline-form" method="post" action="/auth/signout">
         <button class="btn btn-ghost" type="submit">Sign out</button>
       </form>
@@ -30,10 +31,16 @@
   </main>
 
   <!-- Signed-in -->
+  <p id="adminRoleBanner" class="warn role-banner hidden" role="alert">
+    ⚠️ You are a <strong>SuperAdmin</strong> in this portal, but your sign-in shows no active
+    <strong>Application Administrator</strong> or <strong>Cloud Application Administrator</strong> role in Entra.
+    Changes to apps you don't own will fail. Activate the role (e.g. in PIM), then sign out and sign in again.
+  </p>
+
   <main id="signedIn" class="layout hidden">
     <aside class="sidebar">
       <div class="sidebar-head">
-        <h2>My applications <span id="appCount" class="muted"></span></h2>
+        <h2><span id="listTitle">My applications</span> <span id="appCount" class="muted"></span></h2>
         <input id="appFilter" type="search" placeholder="Filter by name or App ID" autocomplete="off">
       </div>
       <ul id="appList" class="app-list" aria-label="Applications you own"></ul>
@@ -55,7 +62,8 @@
           </div>
           <div class="head-actions">
             <button id="refreshBtn" class="btn btn-ghost" type="button">Refresh</button>
-            <button id="disableAppBtn" class="btn btn-danger hidden" type="button" title="Deactivate this app registration. Only an Entra administrator can re-enable it.">Disable app</button>
+            <button id="disableAppBtn" class="btn btn-danger hidden" type="button" title="Deactivate this app registration. Only a SuperAdmin or an Entra administrator can re-enable it.">Disable app</button>
+            <button id="enableAppBtn" class="btn btn-primary hidden" type="button" title="Re-activate this app registration (SuperAdmin only).">Enable app</button>
           </div>
         </div>
 

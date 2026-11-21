@@ -1,0 +1,8 @@
+body { margin: 0; background: #fff; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; }
+.docs-bar { display: flex; align-items: center; gap: 14px; padding: 12px 20px; background: #0f6cbd; color: #fff; }
+.docs-bar a { color: #fff; text-decoration: none; font-weight: 600; }
+.docs-bar a:hover { text-decoration: underline; }
+.docs-title { font-weight: 600; }
+.docs-badge { background: #fff4ce; color: #8a5a00; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.docs-warn { margin: 0; padding: 10px 20px; background: #fff4ce; color: #5c3c00; font-size: 14px; }
+.swagger-ui .topbar { display: none; }

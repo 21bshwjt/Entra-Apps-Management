@@ -70,6 +70,7 @@ app.use('/auth', rateLimit({ name: 'auth', windowMs: 5 * 60 * 1000, max: 60, key
 
 app.use('/auth', auth.router);
 app.use('/api', api);
+app.use('/api-docs', require('./docs')); // Swagger UI, SuperAdmins only
 app.use(express.static(path.join(__dirname, '..', 'public'), {
   index: 'index.html',
   // Always revalidate so a browser never runs an old app.js after an update.

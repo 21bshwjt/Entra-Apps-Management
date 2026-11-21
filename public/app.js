@@ -102,6 +102,7 @@ async function init() {
   rb.textContent = isSuper() ? 'SuperAdmin' : 'Member';
   rb.classList.toggle('super', isSuper());
   rb.classList.remove('hidden');
+  $('#apiDocsLink').classList.toggle('hidden', !isSuper());
   $('#listTitle').textContent = isSuper() ? 'All applications' : 'My applications';
   $('#appList').setAttribute('aria-label', isSuper() ? 'All applications in the tenant' : 'Applications you own');
   $('#adminRoleBanner').classList.toggle('hidden', !isSuper() || state.me.hasAppAdminRole);

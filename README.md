@@ -318,6 +318,7 @@ Who may use the portal, and what they may do, is managed **only in Entra** throu
 | Client secrets, certificates, federated credentials, API permissions, owners | ✅ own apps | ✅ all apps |
 | Disable app | ✅ own apps | ✅ all apps |
 | **Enable app** (re-activate a deactivated app) | ❌ | ✅ all apps |
+| **API docs** (Swagger UI at `/api-docs`) | ❌ | ✅ |
 | Guardrails (privileged apps, guest owners, secret lifetime, last owner) | apply | **apply too** |
 
 A user with **neither** role is refused at sign-in (`403`, `no_role_signin_blocked`). A user with both is a SuperAdmin.
@@ -350,6 +351,20 @@ Keep **Do you want to enable this app role?** ticked. The **Value** must match e
 
 > [!NOTE]
 > Roles are read at sign-in. After assigning or removing a role (or activating one in PIM), the user must **sign out and sign in again**. Sessions from before this version are ended automatically so everyone picks up a role.
+
+**5. Check what the portal sees.** Sign in to the portal, then open **`http://localhost:3000/api/me`** (or `https://<host>/api/me`) in the same browser:
+
+```json
+{ "name": "Jane Doe", "username": "jane@contoso.com", "oid": "…", "role": "superadmin", "hasAppAdminRole": true, "maxSecretMonths": 24 }
+```
+
+| Field | Value | Meaning |
+|---|---|---|
+| `role` | `member` / `superadmin` | The app role read from the `roles` claim |
+| `hasAppAdminRole` | `true` | The `wids` claim includes an **active** Application Administrator, Cloud Application Administrator or Global Administrator role |
+| `hasAppAdminRole` | `false` | No such role is active (e.g. PIM eligible only), or the `wids` claim is off (step 2). SuperAdmins then see the warning banner. Members are always fine with `false`. |
+
+The portal never sends tokens to the browser, so this is the easiest way to check the `roles` and `wids` claims.
 
 ---
 
@@ -674,8 +689,8 @@ The **API permissions** tab and the **Add a permission** dialog also mark high-r
 | 🚫 "You are not an owner of this application" | Ask a current owner to add you. |
 | 🎭 "You have not been assigned a role for this portal" (`403`) | Assign the user `Application.Members` or `Application.SuperAdmin` ([Step 1b](#roles)), then have them **sign out and in again**. Check that the role **Value** is spelled exactly. |
 | 🎭 `AADSTS50105` … not assigned to a role for the application | *Assignment required* is on and the user has no role. Assign one ([Step 1b](#roles)). |
-| 🎭 SuperAdmin sees only their own apps / badge says **Member** | They signed in before getting the role, or also lack it. Sign out and in again; paste the ID token into [jwt.ms](https://jwt.ms) and look for `"roles":["Application.SuperAdmin"]`. |
-| ⚠️ SuperAdmin warning banner about Application Administrator | Their Entra role isn't **active** (PIM eligible only) or the `wids` claim isn't on. Activate it in PIM and sign in again; check *Token configuration* has **Directory roles** ([Step 1b](#roles), step 2). |
+| 🎭 SuperAdmin sees only their own apps / badge says **Member** | They signed in before getting the role, or also lack it. Sign out and in again, then open `/api/me` and check for `"role":"superadmin"` ([Step 1b](#roles), step 5). |
+| ⚠️ SuperAdmin warning banner about Application Administrator | Their Entra role isn't **active** (PIM eligible only) or the `wids` claim isn't on. Activate it in PIM and sign in again; check *Token configuration* has **Directory roles** ([Step 1b](#roles), step 2). `/api/me` should then show `"hasAppAdminRole":true`. |
 | 🚫 SuperAdmin gets `Insufficient privileges` on an app they don't own | Graph refused: they need an **active** Application Administrator or Cloud Application Administrator role. |
 | ⏱️ "Session expired" | The 1-hour idle timeout or the `SESSION_MAX_HOURS` limit (default 8 hours) was reached, or the server restarted (sessions are in memory). Sign in again. |
 | ⛔ "This app holds high-risk permissions … blocked" | The app has a high-risk permission granted. Ask an Entra administrator, or set `PRIVILEGED_APPS=warn` if your policy allows owners to manage such apps. |
@@ -779,6 +794,7 @@ Every denied or suspicious request writes one JSON line to stderr, with `"securi
 | `no_role_signin_blocked` | Sign-in refused: no `Application.Members` / `Application.SuperAdmin` role |
 | `guest_signin_blocked` | Sign-in refused: guest (B2B) account |
 | `enable_not_allowed` | A Member tried to re-enable an app (SuperAdmins only) |
+| `api_docs_not_allowed` | A Member tried to open the Swagger UI or the OpenAPI spec (SuperAdmins only) |
 | `csrf_header_missing` · `bad_origin` · `signout_bad_origin` | Request didn't come from the portal's own page; possible CSRF |
 | `rate_limited` | A user or IP hit a rate limit |
 | `privileged_app_change_blocked` · `privileged_app_change_allowed` | Credential or owner change on a privileged app (blocked, or allowed in `warn` mode) |
@@ -796,6 +812,15 @@ Every denied or suspicious request writes one JSON line to stderr, with `"securi
 
 <a id="rest-api"></a>
 ## 🔌 REST API reference
+
+### 📘 Swagger UI (SuperAdmins only)
+
+SuperAdmins get an **API docs** button in the top bar, which opens **`/api-docs`** (e.g. `http://localhost:3000/api-docs`): interactive Swagger UI for every route below. The OpenAPI 3.0 spec is at `/api-docs/openapi.json`.
+
+- 🔒 **SuperAdmins only.** Members get `403` (logged as `api_docs_not_allowed`); signed-out visitors are sent to the portal to sign in.
+- 🍪 **Try it out** uses your portal session, so you don't need to paste a token. It adds the `X-Requested-With: fetch` header that write requests need.
+- ⚠️ **Try it out makes real changes**, as you, with the same checks as the portal (guardrails, rate limits, audit log).
+- 📦 Swagger UI is served from the `swagger-ui-dist` package inside the portal: no CDN, and the spec is never sent to an outside validator. Scripts stay limited to the portal's own files; only this page also allows inline styles, which Swagger UI needs.
 
 <details>
 <summary><b>Show all endpoints</b></summary>
@@ -843,6 +868,9 @@ All routes need a signed-in session with a portal role. Routes under `/api/apps/
  ┃ ┣ 📜 auth.js        # MSAL sign-in / callback / sign-out, token acquisition
  ┃ ┣ 📜 graph.js       # Microsoft Graph helpers
  ┃ ┣ 📜 api.js         # REST API, ownership guard, validation, audit log
+ ┃ ┣ 📜 openapi.js     # OpenAPI 3.0 spec of the REST API
+ ┃ ┣ 📜 docs.js        # Swagger UI at /api-docs (SuperAdmins only)
+ ┃ ┣ 📂 docs           # Swagger UI page, start-up script and styles
  ┃ ┣ 📜 notify.js      # Expiry e-mails to owners (daily check inside the portal)
  ┃ ┗ 📜 security.js    # High-risk permission list, rate limits, issuer allowlist, certificate checks, security log
  ┣ 📂 data             # notify-state.json: what was e-mailed when (git-ignored)
